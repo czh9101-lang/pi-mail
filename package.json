@@ -1,0 +1,16 @@
+{
+  "name": "pi-mail",
+  "version": "1.0.0",
+  "description": "Federated agent mail for pi — peer-to-peer mailbox daemon plus the mail-orchestrator skill.",
+  "keywords": ["pi-package", "pi-mail", "federation", "orchestrator"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions/index.ts"],
+    "skills": ["./skills"]
+  }
+}
