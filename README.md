@@ -30,10 +30,8 @@ This is a pi package that bundles the extension **and** the `mail-orchestrator`
 skill. Install it like any other package:
 
 ```bash
-pi install ./pi-mail                                 # local path
-# or, once published:
-pi install git:github.com/<user>/pi-mail
-pi install npm:pi-mail
+pi install git:github.com/tanevanwifferen/pi-mail    # from GitHub
+pi install ./pi-mail                                 # from a local clone
 ```
 
 Installing registers the mail extension (tools + commands) and makes the
@@ -103,7 +101,7 @@ Returns per agent: name, id, uptime, context saturation (`ctx=34%`), status.
 ### Status conventions (expected from agents)
 
 Agents update `mail_set_status` automatically when:
-- Starting a task → `"implementing X in repo Y (issue PBD-123)"`
+- Starting a task → `"implementing X in repo Y (issue-123)"`
 - Shifting focus → updated description
 - Going idle → `"idle"` or empty
 
@@ -127,7 +125,7 @@ Broadcasts a probe, waits 20 s, then removes agents that didn't respond.
 - Set a **descriptive name** with `mail_set_name` (e.g. `"portal-web-worker"`).
   Default names are auto-generated slugs.
 - **Keep status current** — the orchestrator reads it to coordinate work:
-  - Task start: `mail_set_status "implementing auth refactor (PBD-456)"`
+  - Task start: `mail_set_status "implementing auth refactor (issue-456)"`
   - Shift: update to new action
   - Done/idle: `mail_set_status ""` or `"idle"`
 
