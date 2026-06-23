@@ -422,6 +422,21 @@ export default function (pi: ExtensionAPI) {
         });
         if (mailResp.type === "mail" && mailResp.messages) {
           mailbox = mailResp.messages;
+
+          // Process any newSession messages that arrived while we were offline.
+          // These were never seen by onNewMail (push path), so handle them now.
+          // Use the last one if there are multiple (most recent task wins).
+          const newSessionMsgs = mailResp.messages.filter((m) => m.newSession);
+          if (newSessionMsgs.length > 0) {
+            const msg = newSessionMsgs[newSessionMsgs.length - 1];
+            // Archive all newSession messages so they don't re-trigger
+            for (const m of newSessionMsgs) {
+              client?.request({ type: "mark_read", messageId: m.id }).catch(() => {});
+            }
+            mailbox = mailbox.filter((m) => !m.newSession);
+            const kickoff = msg.body?.trim() || "";
+            pi.sendUserMessage(`/new-task ${kickoff}`.trimEnd(), { deliverAs: "followUp" });
+          }
         }
         updateStatus();
       }
