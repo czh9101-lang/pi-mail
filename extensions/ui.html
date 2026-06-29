@@ -93,6 +93,10 @@
   .btn.broadcast { background: var(--broadcast); color: #120a1a; }
   .btn:disabled { opacity: .5; cursor: default; }
   .checkbox { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 13px; }
+  /* Always-visible recipient picker — <datalist> renders nothing on iOS Safari */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { background: var(--panel2); color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer; min-height: 32px; }
+  .chip:hover, .chip:active { color: var(--text); border-color: var(--accent); }
 
   /* Messages */
   .msg {
@@ -142,6 +146,11 @@
 
     .msg .head { flex-direction: column; align-items: flex-start; gap: 4px; }
     select.agentpick { min-width: 0; width: 100%; }
+    /* On mobile the agents table becomes stacked cards; let the Send-mail
+       action cell take a full-width tappable button instead of a label row. */
+    tbody td.no-label::before { content: none; }
+    tbody td.no-label { justify-content: flex-end; }
+    tbody td.no-label .btn { width: 100%; }
     .toast { left: 10px; right: 10px; bottom: 10px; }
     /* Safe-area padding for notched phones */
     body { padding-bottom: env(safe-area-inset-bottom); }
@@ -271,7 +280,7 @@ function renderAgents() {
   wrap.style.overflowX = "auto";
   const table = el("table");
   const thead = el("thead"); const trh = el("tr");
-  for (const h of ["Name", "Project", "Status", "Ctx", "Model", "Uptime", "ID"]) {
+  for (const h of ["Name", "Project", "Status", "Ctx", "Model", "Uptime", "ID", "Actions"]) {
     trh.appendChild(el("th", null, h));
   }
   thead.appendChild(trh); table.appendChild(thead);
@@ -281,7 +290,7 @@ function renderAgents() {
     const grp = a.isHuman ? "operator" : projectOf(a.cwd);
     if (grp !== prevGroup) {
       prevGroup = grp;
-      const gr = el("tr"); gr.className = "group-row"; const gtd = el("td"); gtd.colSpan = 7;
+      const gr = el("tr"); gr.className = "group-row"; const gtd = el("td"); gtd.colSpan = 8;
       gtd.style.color = "var(--accent)";
       gtd.style.background = "#11161d";
       gtd.textContent = (a.isHuman ? "👤 " : "📁 ") + grp + (a.cwd && !a.isHuman ? "   " + a.cwd : "");
@@ -305,6 +314,20 @@ function renderAgents() {
     const tdU = el("td", null, a.isHuman ? "—" : fmtUptime(a.registeredAt, state.now)); tdU.dataset.label = "Uptime"; tr.appendChild(tdU);
     // ID
     const tdI = el("td", null, shortId(a.agentId)); tdI.dataset.label = "ID"; tr.appendChild(tdI);
+    // Actions
+    const tdA = el("td"); tdA.className = "no-label"; tdA.dataset.label = "";
+    if (!a.isHuman) {
+      const sendBtn = el("button", "btn secondary", "Send mail");
+      sendBtn.addEventListener("click", () => {
+        compose.to = a.agentName;
+        setTab("mailbox");
+        document.querySelector(".compose input")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      tdA.appendChild(sendBtn);
+    } else {
+      tdA.appendChild(el("span", "empty", "\u2014"));
+    }
+    tr.appendChild(tdA);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody); wrap.appendChild(table); card.appendChild(wrap);
@@ -343,10 +366,20 @@ function renderMailbox() {
   const labelTo = el("label", null, "To (agent name or id — leave blank for broadcast)");
   composeCard.appendChild(labelTo);
   const inputTo = el("input"); inputTo.value = compose.to; inputTo.placeholder = "e.g. portal-web-worker";
-  const dl = el("datalist"); dl.id = "agent-names";
-  for (const a of state.agents) { if (a.isHuman) continue; const o = el("option"); o.value = a.agentName; dl.appendChild(o); }
-  inputTo.setAttribute("list", "agent-names");
-  composeCard.appendChild(dl); composeCard.appendChild(inputTo);
+  composeCard.appendChild(inputTo);
+  // <datalist> suggestions don't render on iOS Safari / most mobile browsers,
+  // so show always-visible tappable chips of known agents instead. Tapping a
+  // chip fills the recipient and keeps the field editable for free-text ids.
+  const chips = el("div", "chips");
+  for (const a of state.agents) {
+    if (a.isHuman) continue;
+    const c = el("button", "chip", a.agentName);
+    if (a.cwd) c.title = projectOf(a.cwd);
+    c.addEventListener("click", () => { compose.to = a.agentName; inputTo.value = a.agentName; inputTo.focus(); });
+    chips.appendChild(c);
+  }
+  if (!chips.children.length) chips.appendChild(el("span", "empty", "No other agents connected."));
+  composeCard.appendChild(chips);
 
   composeCard.appendChild(el("label", null, "Subject"));
   const inputSubj = el("input"); inputSubj.value = compose.subject;
@@ -403,7 +436,7 @@ function renderMailbox() {
   if (!inbox.length) inboxCard.appendChild(el("div", "empty", "No mail yet."));
   for (const m of inbox) {
     const replyBtn = el("button", "btn secondary", "Reply");
-    replyBtn.addEventListener("click", () => { compose.to = m.fromName || m.fromId; inputTo.value = compose.to; compose.subject = m.subject.startsWith("Re:") ? m.subject : "Re: " + m.subject; inputSubj.value = compose.subject; compose.body = ""; taBody.value = ""; currentTab = "mailbox"; render(); inputTo.scrollIntoView(); });
+    replyBtn.addEventListener("click", () => { compose.to = m.fromName || m.fromId; inputTo.value = compose.to; compose.subject = m.subject.startsWith("Re:") ? m.subject : "Re: " + m.subject; inputSubj.value = compose.subject; compose.body = ""; taBody.value = ""; setTab("mailbox"); inputTo.scrollIntoView(); });
     const archiveBtn = el("button", "btn secondary", "Archive");
     archiveBtn.addEventListener("click", async () => { await post("/api/archive", { id: m.id }); refresh(); });
     inboxCard.appendChild(messageRow(m, { showFrom: true, actions: [replyBtn, archiveBtn] }));
@@ -467,13 +500,14 @@ function renderHistory() {
 }
 
 // ── Tabs + polling ───────────────────────────────────────────────────────────
+function setTab(name) {
+  currentTab = name;
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
+  render();
+}
+
 document.querySelectorAll("nav button").forEach(b => {
-  b.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
-    b.classList.add("active");
-    currentTab = b.dataset.tab;
-    render();
-  });
+  b.addEventListener("click", () => setTab(b.dataset.tab));
 });
 
 refresh();
