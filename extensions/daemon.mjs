@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 const SOCKET_PATH = path.join(AGENT_DIR, "mail-daemon.sock");
 const PID_FILE = path.join(AGENT_DIR, "mail-daemon.pid");
+const LOCK_FILE = path.join(AGENT_DIR, "mail-daemon.lock");
 const HISTORY_FILE = path.join(AGENT_DIR, "mail-daemon.history.json");
 const PING_INTERVAL_MS = 5_000;
 
@@ -576,23 +577,62 @@ loadHistory();
 // (e.g. several agents reconnecting at once after a daemon crash) each
 // unlink the socket and re-listen, leaving multiple daemons fighting over
 // the path — the root cause of the reconnect loop.
-await (async () => {
-  try {
-    await new Promise((resolve, reject) => {
-      const probe = net.createConnection(SOCKET_PATH);
-      probe.once("connect", () => {
-        probe.destroy();
-        resolve();
-      });
-      probe.once("error", reject);
-    });
-    // A daemon answered — let it keep running.
-    log("Another daemon is already running; exiting");
-    process.exit(0);
-  } catch {
-    // No live daemon — fall through and take over the socket below.
+//
+// The takeover (probe → unlink stale socket → listen) is wrapped in an
+// OS-atomic exclusive lock file held for the process lifetime, so two
+// concurrent spawns can't both pass the probe and end up running side by
+// side. The socket probe remains as a defence-in-depth liveness check.
+let lockFd = null;
+function acquireInstanceLock() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // 'wx' = O_CREAT | O_EXCL: atomic create-only; fails if the file exists.
+      lockFd = fs.openSync(LOCK_FILE, "wx", 0o600);
+      fs.writeFileSync(lockFd, String(process.pid) + "\n");
+      return true;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      // Lock exists — check whether its owner is still alive.
+      let stale = false;
+      try {
+        const pid = parseInt(fs.readFileSync(LOCK_FILE, "utf8").trim(), 10);
+        if (!pid || !pidAlive(pid)) stale = true;
+      } catch {
+        stale = true;
+      }
+      if (!stale) return false; // a live daemon holds the lock
+      try { fs.unlinkSync(LOCK_FILE); } catch {} // reap stale lock and retry
+    }
   }
-})();
+  return false;
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0); // throws if no such process
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (!acquireInstanceLock()) {
+  log("Another daemon is already running; exiting");
+  process.exit(0);
+}
+
+// Secondary check: even with the lock, confirm no live listener on the socket.
+try {
+  await new Promise((resolve, reject) => {
+    const probe = net.createConnection(SOCKET_PATH);
+    probe.once("connect", () => { probe.destroy(); resolve(); });
+    probe.once("error", reject);
+  });
+  log("Another daemon is already running; exiting");
+  process.exit(0);
+} catch {
+  // No live daemon — fall through and take over the socket below.
+}
 
 // Remove stale socket from previous run
 try {
@@ -694,6 +734,9 @@ function cleanup() {
   } catch {}
   try {
     fs.unlinkSync(PID_FILE);
+  } catch {}
+  try {
+    if (lockFd != null) { fs.closeSync(lockFd); fs.unlinkSync(LOCK_FILE); }
   } catch {}
   // Flush any pending history write before exiting.
   if (persistTimer) {
