@@ -143,6 +143,9 @@ function handleMessage(agentId, msg, socket) {
         // Preserve a previously set status across reconnects / re-registration
         status: existing?.info.status ?? "",
         contextPct: existing?.info.contextPct ?? null,
+        // Working directory of the agent process, used to group agents by
+        // project. Updated on every (re)register so a moved dir is reflected.
+        cwd: msg.cwd ?? existing?.info.cwd ?? "",
       };
       agents.set(msg.agentId, {
         conn: socket,
@@ -296,6 +299,29 @@ function handleMessage(agentId, msg, socket) {
 
 // Ensure dirs exist
 fs.mkdirSync(AGENT_DIR, { recursive: true });
+
+// Single-instance guard: if a live daemon already owns the socket, exit
+// quietly instead of stealing it. Without this, concurrent spawn attempts
+// (e.g. several agents reconnecting at once after a daemon crash) each
+// unlink the socket and re-listen, leaving multiple daemons fighting over
+// the path — the root cause of the reconnect loop.
+await (async () => {
+  try {
+    await new Promise((resolve, reject) => {
+      const probe = net.createConnection(SOCKET_PATH);
+      probe.once("connect", () => {
+        probe.destroy();
+        resolve();
+      });
+      probe.once("error", reject);
+    });
+    // A daemon answered — let it keep running.
+    log("Another daemon is already running; exiting");
+    process.exit(0);
+  } catch {
+    // No live daemon — fall through and take over the socket below.
+  }
+})();
 
 // Remove stale socket from previous run
 try {

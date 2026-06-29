@@ -32,7 +32,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 // jiti provides __dirname for directory-based extensions
 declare const __dirname: string;
@@ -64,6 +64,14 @@ interface AgentInfo {
   registeredAt: number;
   status?: string;
   contextPct?: number | null;
+  /** Working directory of the agent process, used to group agents by project. */
+  cwd?: string;
+}
+
+/** Group key for listing agents: the basename of the agent's cwd. */
+function projectGroupKey(cwd?: string): string {
+  if (!cwd) return "(no project)";
+  return basename(cwd) || cwd;
 }
 
 // ── MailClient ────────────────────────────────────────────────────────────────
@@ -258,31 +266,52 @@ async function tryConnect(socketPath: string): Promise<MailClient | null> {
   }
 }
 
+/** True if a daemon process is currently alive (per its PID file). */
+function isDaemonAlive(): boolean {
+  try {
+    const raw = readFileSync(PID_PATH, "utf8").trim();
+    const pid = parseInt(raw, 10);
+    if (pid > 0) {
+      process.kill(pid, 0); // throws if the process no longer exists
+      return true;
+    }
+  } catch {
+    // No PID file or process dead
+  }
+  return false;
+}
+
 async function ensureDaemonAndConnect(
   socketPath: string,
   daemonScript: string
 ): Promise<MailClient> {
-  // Try existing daemon first
-  const existing = await tryConnect(socketPath);
-  if (existing) return existing;
+  // Try an existing daemon first.
+  let c = await tryConnect(socketPath);
+  if (c) return c;
 
-  // Spawn daemon as detached process
-  const child = spawn("node", [daemonScript], {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-
-  // Wait up to 3 s for the socket to appear
-  for (let i = 0; i < 30; i++) {
-    await sleep(100);
-    if (existsSync(socketPath)) {
-      const c = await tryConnect(socketPath);
-      if (c) return c;
-    }
+  // Only spawn when no daemon process is alive. When several agents reconnect
+  // at once (e.g. after a daemon crash), every one of them would otherwise
+  // spawn its own daemon — the daemons then fight over the socket, agents
+  // briefly connect to a doomed daemon, disconnect, and reconnect again: the
+  // reconnect loop. Gating the spawn on the PID file makes it single-flight.
+  // (The daemon also probes the socket before taking over, so a race here is
+  // safe — the loser just exits.)
+  if (!isDaemonAlive()) {
+    const child = spawn("node", [daemonScript], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
   }
 
-  throw new Error("Failed to connect to pi-mail daemon after 3 s");
+  // Wait up to 6 s for the daemon (existing or freshly spawned) to answer.
+  for (let i = 0; i < 60; i++) {
+    await sleep(100);
+    c = await tryConnect(socketPath);
+    if (c) return c;
+  }
+
+  throw new Error("Failed to connect to pi-mail daemon after 6 s");
 }
 
 // ── Extension ─────────────────────────────────────────────────────────────────
@@ -291,6 +320,8 @@ export default function (pi: ExtensionAPI) {
   let client: MailClient | null = null;
   let agentId = randomUUID();  // may be overwritten from session entries in session_start
   let agentName = `${basename(process.cwd()) || "pi-agent"}-${agentId.slice(0, 6)}`;
+  // Fixed per process — the directory pi was launched in (the "project").
+  const agentCwd = process.cwd();
   let agentStatus = "";
   // True once the agent/user has chosen an explicit name (vs. the auto slug)
   let nameCustomized = false;
@@ -298,7 +329,13 @@ export default function (pi: ExtensionAPI) {
   let agentIdRestored = false;
   let mailbox: MailMessage[] = [];
   let connected = false;
-  let reconnecting = false;
+  // Reconnect driver: exponential backoff that keeps retrying instead of
+  // giving up after a single failed attempt.
+  let suppressReconnect = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempts = 0;
+  const RECONNECT_BASE_MS = 1_000;
+  const RECONNECT_MAX_MS = 30_000;
   // Ensures only one in-flight connectToDaemon() at a time per process instance
   let connectingPromise: Promise<void> | null = null;
 
@@ -338,6 +375,36 @@ export default function (pi: ExtensionAPI) {
       connectingPromise = null;
     });
     return connectingPromise;
+  }
+
+  function clearReconnect(): void {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  /**
+   * Auto-reconnect with exponential backoff. Keeps retrying (rather than
+   * giving up after one attempt) so a daemon that takes a while to come back
+   * is recovered automatically. No-op while an intentional disconnect is
+   * in progress or a retry is already pending.
+   */
+  function scheduleReconnect(): void {
+    if (suppressReconnect) return;
+    if (reconnectTimer) return; // already pending
+    const backoff = Math.min(
+      RECONNECT_MAX_MS,
+      RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempts, 5)
+    );
+    reconnectAttempts++;
+    reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null;
+      await connectToDaemon().catch(() => {});
+      // If the attempt failed (or the new connection dropped immediately),
+      // keep trying with further backoff.
+      if (!connected && !suppressReconnect) scheduleReconnect();
+    }, backoff);
   }
 
   async function _connectToDaemon(): Promise<void> {
@@ -389,14 +456,7 @@ export default function (pi: ExtensionAPI) {
         connected = false;
         client = null;
         updateStatus();
-        // Attempt reconnect with backoff
-        if (!reconnecting) {
-          reconnecting = true;
-          setTimeout(async () => {
-            reconnecting = false;
-            await connectToDaemon().catch(() => {});
-          }, 3000);
-        }
+        scheduleReconnect();
       };
 
       // Register with the daemon
@@ -404,10 +464,14 @@ export default function (pi: ExtensionAPI) {
         type: "register",
         agentId,
         agentName,
+        cwd: agentCwd,
       });
 
       if (resp.type === "registered") {
         connected = true;
+        // Stable connection — reset the backoff state.
+        reconnectAttempts = 0;
+        clearReconnect();
         // Flush any messages that were buffered while we were disconnected
         client.flushWriteQueue();
         // Restore status on the daemon side after (re)connecting
@@ -443,10 +507,16 @@ export default function (pi: ExtensionAPI) {
     } catch {
       connected = false;
       client = null;
+      // Start (or continue) the backoff retry loop so we recover once the
+      // daemon is back, instead of staying offline forever after one failure.
+      scheduleReconnect();
     }
   }
 
   async function disconnectFromDaemon(cleanExit: boolean): Promise<void> {
+    // Intentional disconnect — don't let onDisconnect trigger auto-reconnect.
+    suppressReconnect = true;
+    clearReconnect();
     if (client && connected && cleanExit) {
       try {
         await client.request({ type: "unregister", agentId });
@@ -587,7 +657,7 @@ export default function (pi: ExtensionAPI) {
       // Re-register with new name (daemon updates its registry)
       if (client && connected) {
         try {
-          await client.request({ type: "register", agentId, agentName });
+          await client.request({ type: "register", agentId, agentName, cwd: agentCwd });
         } catch {}
       }
 
@@ -601,7 +671,11 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       latestCtx = ctx;
 
-      // Disconnect our own client first (without clearing our mailbox)
+      // Disconnect our own client first (without clearing our mailbox).
+      // Suppress the auto-reconnect that onDisconnect would otherwise schedule,
+      // since we explicitly reconnect below.
+      suppressReconnect = true;
+      clearReconnect();
       client?.disconnect();
       client = null;
       connected = false;
@@ -623,6 +697,7 @@ export default function (pi: ExtensionAPI) {
       await sleep(killed ? 500 : 100);
 
       // Reconnect — ensureDaemonAndConnect spawns a new daemon if needed
+      suppressReconnect = false;
       await connectToDaemon().catch(() => {});
       updateStatus(ctx);
 
@@ -653,14 +728,26 @@ export default function (pi: ExtensionAPI) {
           type: "list_agents",
         });
         if (resp.type === "agents" && resp.agents) {
-          const lines = resp.agents.map((a) => {
+          const sorted = [...resp.agents].sort(
+            (x, y) =>
+              projectGroupKey(x.cwd).localeCompare(projectGroupKey(y.cwd)) ||
+              x.agentName.localeCompare(y.agentName)
+          );
+          const lines: string[] = [];
+          let prev = "";
+          for (const a of sorted) {
+            const grp = projectGroupKey(a.cwd);
+            if (grp !== prev) {
+              prev = grp;
+              lines.push(`📁 ${grp}${a.cwd && a.cwd !== grp ? `  (${a.cwd})` : ""}`);
+            }
             const self = a.agentId === agentId ? " (you)" : "";
             const upSec = Math.round((Date.now() - a.registeredAt) / 1000);
             const up = upSec < 60 ? `${upSec}s` : upSec < 3600 ? `${Math.round(upSec / 60)}m` : `${Math.round(upSec / 3600)}h`;
             const ctx2 = a.contextPct != null ? ` ctx=${a.contextPct}%` : "";
             const st = a.status ? ` — ${a.status}` : "";
-            return `${a.agentName}${self} [${up}]${ctx2}${st}`;
-          });
+            lines.push(`  • ${a.agentName}${self} [${up}]${ctx2}${st}`);
+          }
           ctx.ui.notify(`${resp.agents.length} agents:\n${lines.join("\n")}`, "info");
         }
         return;
@@ -678,7 +765,11 @@ export default function (pi: ExtensionAPI) {
             type: "list_agents",
           });
           if (resp.type === "agents" && resp.agents) {
-            agentRows = resp.agents;
+            agentRows = [...resp.agents].sort(
+              (x, y) =>
+                projectGroupKey(x.cwd).localeCompare(projectGroupKey(y.cwd)) ||
+                x.agentName.localeCompare(y.agentName)
+            );
             lastRefresh = Date.now();
             refreshError = "";
           }
@@ -739,20 +830,29 @@ export default function (pi: ExtensionAPI) {
           if (agentRows.length === 0) {
             lines.push(theme.fg("muted", "  (no agents)"));
           } else {
+            let prevGroup = "";
             agentRows.forEach((a, i) => {
+              const grp = projectGroupKey(a.cwd);
+              if (grp !== prevGroup) {
+                prevGroup = grp;
+                const full = a.cwd ?? "";
+                const header =
+                  theme.fg("accent", `📁 ${grp}`) +
+                  (full && full !== grp ? theme.fg("dim", `  ${full}`) : "");
+                lines.push(" " + header);
+              }
               const self = a.agentId === agentId;
               const selfMark = self ? theme.fg("accent", " ←") : "   ";
-              const rawName = a.agentName + (self ? "" : "");
               const name = self
-                ? theme.fg("accent", pad(rawName, 24)) + selfMark
-                : theme.fg("text", pad(rawName, 24)) + selfMark;
+                ? theme.fg("accent", pad(a.agentName, 24)) + selfMark
+                : theme.fg("text", pad(a.agentName, 24)) + selfMark;
               const up = theme.fg("dim", pad(fmtUptime(a.registeredAt), 5));
               const ctxStr = " " + fmtCtx(a.contextPct, theme) + " ";
               const status = a.status
                 ? theme.fg(i === selectedIdx ? "text" : "muted", a.status)
                 : theme.fg("dim", "—");
 
-              const row = name + " " + up + ctxStr + status;
+              const row = "  " + name + " " + up + ctxStr + status;
               if (i === selectedIdx) {
                 lines.push(theme.bg("selectedBg", " " + row));
               } else {
@@ -1116,7 +1216,19 @@ export default function (pi: ExtensionAPI) {
         if (resp.agents.length === 0) {
           return { content: [{ type: "text", text: "🤝 No agents currently connected" }] };
         }
-        const lines = resp.agents.map((a) => {
+        const sorted = [...resp.agents].sort(
+          (x, y) =>
+            projectGroupKey(x.cwd).localeCompare(projectGroupKey(y.cwd)) ||
+            x.agentName.localeCompare(y.agentName)
+        );
+        const lines: string[] = [];
+        let prev = "";
+        for (const a of sorted) {
+          const grp = projectGroupKey(a.cwd);
+          if (grp !== prev) {
+            prev = grp;
+            lines.push(`📁 ${grp}${a.cwd && a.cwd !== grp ? `  (${a.cwd})` : ""}`);
+          }
           const self = a.agentId === agentId ? " ← you" : "";
           const upSec = Math.round((Date.now() - a.registeredAt) / 1000);
           const upTime =
@@ -1127,8 +1239,8 @@ export default function (pi: ExtensionAPI) {
               : `${Math.round(upSec / 3600)}h`;
           const ctxStr = a.contextPct != null ? ` ctx=${a.contextPct}%` : "";
           const status = a.status ? `\n    ↳ status: ${a.status}` : "";
-          return `• ${a.agentName}${self}  [online ${upTime}] id=${a.agentId.slice(0, 8)}${ctxStr}${status}`;
-        });
+          lines.push(`  • ${a.agentName}${self}  [online ${upTime}] id=${a.agentId.slice(0, 8)}${ctxStr}${status}`);
+        }
         return {
           content: [
             {
