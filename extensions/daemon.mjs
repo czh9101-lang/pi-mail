@@ -39,7 +39,7 @@ const PING_INTERVAL_MS = 5_000;
  * Live agent connections.
  * @type {Map<string, { conn: net.Socket, info: AgentInfo, pingTimer: NodeJS.Timeout | null, pongPending: boolean }>}
  *
- * @typedef {{ agentId: string, agentName: string, registeredAt: number, status: string, contextPct: number | null }} AgentInfo
+ * @typedef {{ agentId: string, agentName: string, registeredAt: number, status: string, contextPct: number | null, model: string }} AgentInfo
  */
 const agents = new Map();
 
@@ -146,6 +146,7 @@ function handleMessage(agentId, msg, socket) {
         // Working directory of the agent process, used to group agents by
         // project. Updated on every (re)register so a moved dir is reflected.
         cwd: msg.cwd ?? existing?.info.cwd ?? "",
+        model: msg.model ?? existing?.info.model ?? "",
       };
       agents.set(msg.agentId, {
         conn: socket,
@@ -247,6 +248,15 @@ function handleMessage(agentId, msg, socket) {
       const agent = agents.get(agentId);
       if (agent) {
         agent.info.contextPct = typeof msg.pct === "number" ? msg.pct : null;
+      }
+      // fire-and-forget: no response needed
+      break;
+    }
+
+    case "set_model": {
+      const agent = agents.get(agentId);
+      if (agent) {
+        agent.info.model = msg.model ?? "";
       }
       // fire-and-forget: no response needed
       break;

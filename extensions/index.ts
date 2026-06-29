@@ -66,6 +66,8 @@ interface AgentInfo {
   contextPct?: number | null;
   /** Working directory of the agent process, used to group agents by project. */
   cwd?: string;
+  /** Active model identifier, e.g. "anthropic/claude-sonnet-4". */
+  model?: string;
 }
 
 /** Group key for listing agents: the basename of the agent's cwd. */
@@ -323,6 +325,8 @@ export default function (pi: ExtensionAPI) {
   // Fixed per process — the directory pi was launched in (the "project").
   const agentCwd = process.cwd();
   let agentStatus = "";
+  /** Active model string, e.g. "anthropic/claude-sonnet-4". Updated via model_select event. */
+  let agentModel = "";
   // True once the agent/user has chosen an explicit name (vs. the auto slug)
   let nameCustomized = false;
   // Track whether agentId was restored from a previous session (prevents double-counting on reload)
@@ -465,6 +469,7 @@ export default function (pi: ExtensionAPI) {
         agentId,
         agentName,
         cwd: agentCwd,
+        model: agentModel,
       });
 
       if (resp.type === "registered") {
@@ -474,10 +479,15 @@ export default function (pi: ExtensionAPI) {
         clearReconnect();
         // Flush any messages that were buffered while we were disconnected
         client.flushWriteQueue();
-        // Restore status on the daemon side after (re)connecting
+        // Restore status and model on the daemon side after (re)connecting
         if (agentStatus) {
           try {
             await client.request({ type: "set_status", status: agentStatus });
+          } catch {}
+        }
+        if (agentModel) {
+          try {
+            await client.request({ type: "set_model", model: agentModel });
           } catch {}
         }
         // Load any pending mail (e.g. from a previous session or offline delivery)
@@ -625,6 +635,14 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
+  // Keep agentModel in sync whenever the model changes
+  pi.on("model_select", async (event, _ctx) => {
+    agentModel = `${event.model.provider}/${event.model.id}`;
+    if (client && connected) {
+      client.fire({ type: "set_model", model: agentModel });
+    }
+  });
+
   // Track ctx for status updates during turns
   pi.on("turn_start", async (_event, ctx) => {
     latestCtx = ctx;
@@ -745,8 +763,9 @@ export default function (pi: ExtensionAPI) {
             const upSec = Math.round((Date.now() - a.registeredAt) / 1000);
             const up = upSec < 60 ? `${upSec}s` : upSec < 3600 ? `${Math.round(upSec / 60)}m` : `${Math.round(upSec / 3600)}h`;
             const ctx2 = a.contextPct != null ? ` ctx=${a.contextPct}%` : "";
+            const modelStr = a.model ? ` model=${a.model}` : "";
             const st = a.status ? ` — ${a.status}` : "";
-            lines.push(`  • ${a.agentName}${self} [${up}]${ctx2}${st}`);
+            lines.push(`  • ${a.agentName}${self} [${up}]${ctx2}${modelStr}${st}`);
           }
           ctx.ui.notify(`${resp.agents.length} agents:\n${lines.join("\n")}`, "info");
         }
@@ -823,6 +842,7 @@ export default function (pi: ExtensionAPI) {
             theme.fg("dim", pad("name", 26)) +
             theme.fg("dim", pad("up", 5)) +
             theme.fg("dim", " ctx  ") +
+            theme.fg("dim", pad("model", 28)) +
             theme.fg("dim", "status");
           lines.push(" " + colHdr);
           lines.push(hr);
@@ -848,11 +868,14 @@ export default function (pi: ExtensionAPI) {
                 : theme.fg("text", pad(a.agentName, 24)) + selfMark;
               const up = theme.fg("dim", pad(fmtUptime(a.registeredAt), 5));
               const ctxStr = " " + fmtCtx(a.contextPct, theme) + " ";
+              const modelLabel = a.model
+                ? theme.fg("dim", pad(a.model, 28))
+                : theme.fg("dim", pad("—", 28));
               const status = a.status
                 ? theme.fg(i === selectedIdx ? "text" : "muted", a.status)
                 : theme.fg("dim", "—");
 
-              const row = "  " + name + " " + up + ctxStr + status;
+              const row = "  " + name + " " + up + ctxStr + modelLabel + status;
               if (i === selectedIdx) {
                 lines.push(theme.bg("selectedBg", " " + row));
               } else {
@@ -1238,8 +1261,9 @@ export default function (pi: ExtensionAPI) {
               ? `${Math.round(upSec / 60)}m`
               : `${Math.round(upSec / 3600)}h`;
           const ctxStr = a.contextPct != null ? ` ctx=${a.contextPct}%` : "";
+          const modelStr = a.model ? `\n    ↳ model: ${a.model}` : "";
           const status = a.status ? `\n    ↳ status: ${a.status}` : "";
-          lines.push(`  • ${a.agentName}${self}  [online ${upTime}] id=${a.agentId.slice(0, 8)}${ctxStr}${status}`);
+          lines.push(`  • ${a.agentName}${self}  [online ${upTime}] id=${a.agentId.slice(0, 8)}${ctxStr}${modelStr}${status}`);
         }
         return {
           content: [
