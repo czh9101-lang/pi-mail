@@ -171,6 +171,7 @@ let currentTab = "agents";
 let historyAgentId = "";        // selected agent in History tab
 let compose = { to: "", subject: "", body: "", newSession: false }; // sticky compose draft
 let pollTimer = null;
+let lastSig = null;
 
 const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
@@ -216,13 +217,21 @@ async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    state = await r.json();
+    const next = await r.json();
+    state = next;
     $("#status").innerHTML = "";
     const n = state.agents.filter(a => !a.isHuman).length;
     const span = el("span", "pulse", "● live");
     $("#status").appendChild(span);
     $("#status").appendChild(document.createTextNode(`  ·  ${n} agent${n === 1 ? "" : "s"}  ·  ${state.messages.length} message${state.messages.length === 1 ? "" : "s"} in history`));
-    render();
+    // Re-rendering wipes the whole DOM tree in <main>, which on mobile
+    // dismisses the on-screen keyboard every poll. So:
+    //  - never re-render while the user is focused inside <main> (typing),
+    //  - and skip when nothing actually changed.
+    const focusedInMain = document.activeElement && main.contains(document.activeElement);
+    const sig = JSON.stringify([state.agents, state.messages]);
+    if (focusedInMain) { lastSig = sig; return; }
+    if (sig !== lastSig) { lastSig = sig; render(); }
   } catch (e) {
     $("#status").innerHTML = "";
     $("#status").appendChild(el("span", "", "⚠ disconnected (" + esc(e.message) + ")"));
