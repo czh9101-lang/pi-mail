@@ -23,6 +23,73 @@ shared mailbox daemon. Peer-to-peer federation — no central authority required
   Mailbox is preserved for reconnect. Only a clean exit (`unregister`) clears it.
 - **Buffering** — outgoing messages are buffered when the socket is temporarily
   unavailable and flushed automatically on reconnect.
+- **Web UI** — the daemon also serves an HTTP console (default `0.0.0.0:1994`) so
+  a human operator can browse the federation, read per-agent mail history, and
+  send or broadcast mail as a first-class `human` agent. See [Web UI](#web-ui).
+
+## Web UI
+
+The daemon hosts a dependency-free single-page web console alongside the Unix
+socket. Open it in a browser:
+
+```
+http://localhost:1994
+```
+
+### Configuration
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `PI_MAIL_UI_PORT` | `1994` | TCP port for the web UI |
+| `PI_MAIL_UI_HOST` | `0.0.0.0` | Bind address (use `127.0.0.1` to restrict to localhost) |
+
+The UI starts with the daemon and is non-fatal if the port is taken — the mail
+federation keeps working regardless. Restart the daemon to apply changes:
+
+```
+/restart-mail-daemon
+```
+
+### The `human` agent
+
+The UI acts as a fixed virtual agent named `human` (well-known id
+`00000000-0000-0000-0000-000000000000`). It has no live socket of its own —
+its inbox is the slice of the persisted message history addressed to it.
+
+- The human appears in `mail_list_agents`, so agents can discover it and reply
+  to your messages by sending to `human`.
+- Broadcasts are copied to the human's inbox so the operator sees everything.
+- Mail you send through the UI is delivered to agents exactly like agent-to-agent
+  mail (including the `newSession` flag, which starts a fresh session on the
+  recipient).
+
+### Views
+
+1. **Agents** — live table of every connected agent: name, project (cwd),
+   status, context saturation, model, uptime, id. Auto-refreshes every 3 s.
+2. **My Mailbox** — your inbox (mail addressed to `human`, archiveable), your
+   outbox (mail you sent, with broadcasts grouped), and a compose form to send
+   to a named agent or broadcast to all.
+3. **History** — pick any agent and see the full history of mail delivered to
+   it (direct + broadcast, including archived messages).
+
+### Persistence
+
+The full message history (the UI's source of truth) is persisted to
+`~/.pi/agent/mail-daemon.history.json` and survives daemon restarts. Live agent
+mailboxes remain in-memory with their existing reclaim-on-reconnect semantics.
+
+### HTTP API
+
+The SPA talks to a tiny JSON API you can also call directly:
+
+| Method & path | Body | Returns |
+|---------------|------|---------|
+| `GET /api/state` | — | `{ human, agents[], messages[] }` — full snapshot |
+| `POST /api/send` | `{ to, subject, body, newSession? }` | `{ ok, messageId? \| error? }` |
+| `POST /api/broadcast` | `{ subject, body }` | `{ ok, recipients }` |
+| `POST /api/archive` | `{ id }` | `{ ok }` — archives a message in the human inbox |
+
 
 ## Setup
 
@@ -147,7 +214,8 @@ pi-mail/                              Package root
 ├── package.json                      pi manifest (extensions + skills)
 ├── extensions/
 │   ├── index.ts                      Extension entry point (TypeScript, loaded via jiti)
-│   └── daemon.mjs                    Singleton daemon (plain Node.js, no build step)
+│   ├── daemon.mjs                    Singleton daemon (plain Node.js, no build step) — also serves the web UI
+│   └── ui.html                       Web UI single-page app (served by the daemon)
 ├── skills/
 │   └── mail-orchestrator/SKILL.md    Orchestrator skill, shipped with the plugin
 └── README.md                         This file

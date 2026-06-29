@@ -5,6 +5,10 @@
  * Manages agent registration, mailboxes, and routing.
  * Communication: newline-delimited JSON over a Unix domain socket.
  *
+ * Also hosts an optional HTTP web UI (default port 1994) so a human operator
+ * can browse per-agent mail history, see the live federation, and send or
+ * broadcast mail as a first-class "human" agent.
+ *
  * Lifecycle:
  *   - Spawned by the pi-mail extension when not already running
  *   - Stays alive as long as at least one agent is connected (or forever)
@@ -16,30 +20,51 @@
  *   - If no pong within the next ping cycle, the connection is terminated
  *
  * Mailbox durability:
- *   - Mailboxes persist through disconnects (agent can reconnect and read mail)
- *   - Mailbox is cleared on explicit unregister (clean exit)
+ *   - Live agent mailboxes persist through disconnects (reclaim on reconnect)
+ *   - A clean unregister clears that agent's live mailbox
+ *   - The full message history (for the UI) is persisted to disk and survives
+ *     daemon restarts; the human's inbox is derived from that history.
  */
 
 import net from "node:net";
+import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 const SOCKET_PATH = path.join(AGENT_DIR, "mail-daemon.sock");
 const PID_FILE = path.join(AGENT_DIR, "mail-daemon.pid");
+const HISTORY_FILE = path.join(AGENT_DIR, "mail-daemon.history.json");
 const PING_INTERVAL_MS = 5_000;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UI_HTML_PATH = path.join(__dirname, "ui.html");
+
+// HTTP UI bind settings. Override with env vars if needed.
+const UI_HOST = process.env.PI_MAIL_UI_HOST || "0.0.0.0";
+const UI_PORT = parseInt(process.env.PI_MAIL_UI_PORT || "1994", 10);
+
+// ── Human agent ──────────────────────────────────────────────────────────────
+//
+// A fixed, well-known virtual agent so a human operator can send and receive
+// mail through the web UI. It has no live socket — its "inbox" is just the
+// slice of the message history addressed to this ID.
+
+const HUMAN_AGENT_ID = "00000000-0000-0000-0000-000000000000";
+const HUMAN_AGENT_NAME = "human";
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /**
  * Live agent connections.
- * @type {Map<string, { conn: net.Socket, info: AgentInfo, pingTimer: NodeJS.Timeout | null, pongPending: boolean }>}
+ * @type {Map<string, { conn: net.Socket, info: AgentInfo, pingTimer: NodeJS.Timeout | null, pongPending: boolean, lastSeen: number }>}
  *
- * @typedef {{ agentId: string, agentName: string, registeredAt: number, status: string, contextPct: number | null, model: string }} AgentInfo
+ * @typedef {{ agentId: string, agentName: string, registeredAt: number, status: string, contextPct: number | null, model: string, cwd: string, isHuman?: boolean }} AgentInfo
  */
 const agents = new Map();
 
@@ -47,25 +72,86 @@ const agents = new Map();
  * Durable mailboxes (survives disconnects until unregister).
  * @type {Map<string, MailMessage[]>}
  *
- * @typedef {{ id: string, fromId: string, fromName: string, subject: string, body: string, timestamp: number, read: boolean }} MailMessage
+ * @typedef {{ id: string, fromId: string, fromName: string, subject: string, body: string, timestamp: number, read: boolean, broadcast?: boolean, newSession?: boolean }} MailMessage
  */
 const mailboxes = new Map();
+
+/**
+ * Append-only message history — the single source of truth for the web UI.
+ * Each entry is a delivered message enriched with recipient info.
+ *
+ * @type {Array<MailMessage & { toId: string, toName: string, archived: boolean, broadcastId: string | null }>}
+ */
+let messageLog = [];
+
+// ── Persistence ──────────────────────────────────────────────────────────────
+//
+// The history is small (federation mail is low-volume) so we rewrite the whole
+// file, debounced, on each change. This keeps the UI's history across daemon
+// restarts (/restart-mail-daemon, crashes, reboots).
+
+let persistTimer = null;
+function schedulePersist() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      fs.writeFileSync(HISTORY_FILE, JSON.stringify(messageLog));
+    } catch (e) {
+      log(`persist failed: ${e.message}`);
+    }
+  }, 300);
+}
+
+function loadHistory() {
+  try {
+    const raw = fs.readFileSync(HISTORY_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    messageLog = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    messageLog = [];
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket, msg) {
-  if (!socket.destroyed) {
-    try {
-      socket.write(JSON.stringify(msg) + "\n");
-    } catch {}
-  }
+  if (!socket || socket.destroyed) return;
+  try {
+    socket.write(JSON.stringify(msg) + "\n");
+  } catch {}
 }
 
 function log(msg) {
   process.stderr.write(`[pi-mail daemon] ${msg}\n`);
 }
 
-function deliverMail(toAgentId, message) {
+function agentDisplayName(agentId) {
+  if (agentId === HUMAN_AGENT_ID) return HUMAN_AGENT_NAME;
+  return agents.get(agentId)?.info.agentName ?? agentId;
+}
+
+/** Append a delivered message to the history log (UI source of truth). */
+function logDelivery(message, toAgentId, opts = {}) {
+  const entry = {
+    ...message,
+    toId: toAgentId,
+    toName: agentDisplayName(toAgentId),
+    archived: false,
+    broadcastId: opts.broadcastId ?? null,
+  };
+  messageLog.push(entry);
+  schedulePersist();
+}
+
+function deliverMail(toAgentId, message, opts = {}) {
+  // Record in history regardless of recipient (including the human).
+  logDelivery(message, toAgentId, opts);
+
+  // The human has no live mailbox or socket — its inbox is the history slice
+  // where toId === HUMAN_AGENT_ID && !archived.
+  if (toAgentId === HUMAN_AGENT_ID) return;
+
   let box = mailboxes.get(toAgentId);
   if (!box) {
     box = [];
@@ -81,16 +167,111 @@ function deliverMail(toAgentId, message) {
 }
 
 function makeMail(fromAgentId, subject, body, extra = {}) {
-  const agent = agents.get(fromAgentId);
+  const fromName =
+    fromAgentId === HUMAN_AGENT_ID
+      ? HUMAN_AGENT_NAME
+      : agents.get(fromAgentId)?.info.agentName ?? fromAgentId;
   return {
     id: crypto.randomUUID(),
     fromId: fromAgentId,
-    fromName: agent?.info.agentName ?? fromAgentId,
+    fromName,
     subject: subject ?? "(no subject)",
     body: body ?? "",
     timestamp: Date.now(),
     read: false,
     ...extra,
+  };
+}
+
+/** Resolve a recipient spec (name, full id, or id prefix) to an agentId. */
+function resolveTarget(to) {
+  if (!to) return null;
+  // Human is always resolvable by name or id.
+  if (to === HUMAN_AGENT_ID || to === HUMAN_AGENT_NAME) return HUMAN_AGENT_ID;
+  for (const [id, a] of agents) {
+    if (id === to || id.startsWith(to) || a.info.agentName === to) {
+      return id;
+    }
+  }
+  // Offline agents we still hold a mailbox for.
+  for (const [id] of mailboxes) {
+    if (id === to || id.startsWith(to)) return id;
+  }
+  return null;
+}
+
+/**
+ * Send mail from one agent to another. Shared by the socket protocol handler
+ * and the HTTP/UI send path (which sends as the human).
+ * @returns {{ messageId?: string, error?: string }}
+ */
+function sendMail(fromId, toSpec, subject, body, opts = {}) {
+  const targetId = resolveTarget(toSpec);
+  if (!targetId) return { error: `Agent '${toSpec}' not found` };
+  const mail = makeMail(fromId, subject, body, opts.newSession ? { newSession: true } : {});
+  deliverMail(targetId, mail);
+  return { messageId: mail.id };
+}
+
+/**
+ * Broadcast mail from one agent to all others. The human is included as a
+ * recipient whenever the sender is not the human, so the operator sees every
+ * broadcast in their inbox.
+ * @returns {{ recipients: number, broadcastId: string }}
+ */
+function broadcastMail(fromId, subject, body) {
+  const broadcastId = crypto.randomUUID();
+  let count = 0;
+  for (const [id] of agents) {
+    if (id === fromId) continue; // don't self-send
+    const mail = { ...makeMail(fromId, subject, body), broadcast: true };
+    deliverMail(id, mail, { broadcastId });
+    count++;
+  }
+  // Deliver a copy to the human unless the human is the sender.
+  if (fromId !== HUMAN_AGENT_ID) {
+    const mail = { ...makeMail(fromId, subject, body), broadcast: true };
+    deliverMail(HUMAN_AGENT_ID, mail, { broadcastId });
+  }
+  return { recipients: count, broadcastId };
+}
+
+// ── Human inbox operations ───────────────────────────────────────────────────
+
+/** Archive a message addressed to the human (hide from inbox). */
+function archiveHumanMessage(id) {
+  if (!id) return false;
+  let found = false;
+  for (const m of messageLog) {
+    if (m.id === id && m.toId === HUMAN_AGENT_ID && !m.archived) {
+      m.archived = true;
+      found = true;
+    }
+  }
+  if (found) schedulePersist();
+  return found;
+}
+
+// ── Federation snapshot (for the UI) ──────────────────────────────────────────
+
+function federationState() {
+  const list = Array.from(agents.values()).map((a) => a.info);
+  // Always expose the human as a virtual, discoverable agent.
+  list.push({
+    agentId: HUMAN_AGENT_ID,
+    agentName: HUMAN_AGENT_NAME,
+    registeredAt: 0,
+    status: "human operator",
+    contextPct: null,
+    cwd: "",
+    model: "",
+    isHuman: true,
+  });
+  return {
+    human: { agentId: HUMAN_AGENT_ID, agentName: HUMAN_AGENT_NAME },
+    agents: list,
+    messages: messageLog,
+    now: Date.now(),
   };
 }
 
@@ -177,44 +358,22 @@ function handleMessage(agentId, msg, socket) {
     }
 
     case "send": {
-      // Resolve target by agentId or agentName (first match)
-      let targetId = null;
-      for (const [id, a] of agents) {
-        if (id === msg.to || id.startsWith(msg.to) || a.info.agentName === msg.to) {
-          targetId = id;
-          break;
-        }
+      const r = sendMail(agentId, msg.to, msg.subject, msg.body, {
+        newSession: !!msg.newSession,
+      });
+      if (r.error) {
+        reply({ type: "error", message: r.error });
+      } else {
+        reply({ type: "sent", messageId: r.messageId });
       }
-      // Also check mailboxes for offline agents
-      if (!targetId) {
-        for (const [id] of mailboxes) {
-          if (id === msg.to) {
-            targetId = id;
-            break;
-          }
-        }
-      }
-      if (!targetId) {
-        reply({ type: "error", message: `Agent '${msg.to}' not found` });
-        break;
-      }
-      const mail = makeMail(agentId, msg.subject, msg.body, msg.newSession ? { newSession: true } : {});
-      deliverMail(targetId, mail);
-      reply({ type: "sent", messageId: mail.id });
       break;
     }
 
     case "broadcast": {
-      const recipients = [];
-      for (const [id] of agents) {
-        if (id === agentId) continue; // don't self-send
-        const mail = { ...makeMail(agentId, msg.subject, msg.body), broadcast: true };
-        deliverMail(id, mail);
-        recipients.push(id);
-      }
-      reply({ type: "sent", recipients: recipients.length });
+      const r = broadcastMail(agentId, msg.subject, msg.body);
+      reply({ type: "sent", recipients: r.recipients });
       log(
-        `Broadcast from ${agents.get(agentId)?.info.agentName ?? agentId.slice(0, 8)} → ${recipients.length} agent(s)`
+        `Broadcast from ${agents.get(agentId)?.info.agentName ?? agentId.slice(0, 8)} → ${r.recipients} agent(s)`
       );
       break;
     }
@@ -263,8 +422,8 @@ function handleMessage(agentId, msg, socket) {
     }
 
     case "list_agents": {
-      const list = Array.from(agents.values()).map((a) => a.info);
-      reply({ type: "agents", agents: list });
+      // Include the human so agents can discover and reply to the operator.
+      reply({ type: "agents", agents: federationState().agents });
       break;
     }
 
@@ -305,10 +464,112 @@ function handleMessage(agentId, msg, socket) {
   }
 }
 
+// ── HTTP web UI ───────────────────────────────────────────────────────────────
+
+let UI_HTML = "";
+try {
+  UI_HTML = fs.readFileSync(UI_HTML_PATH, "utf8");
+} catch (e) {
+  log(`ui.html not found at ${UI_HTML_PATH}: ${e.message}`);
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (c) => {
+      data += c;
+      if (data.length > 1_000_000) req.destroy(); // guard against huge bodies
+    });
+    req.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+
+function json(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+const httpServer = http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://localhost");
+  try {
+    if (req.method === "GET" && url.pathname === "/") {
+      if (!UI_HTML) {
+        json(res, 500, { error: "ui.html not available" });
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(UI_HTML);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/state") {
+      json(res, 200, federationState());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/send") {
+      const body = await readJsonBody(req);
+      if (!body.to || typeof body.to !== "string") {
+        json(res, 400, { ok: false, error: "Missing 'to'" });
+        return;
+      }
+      const r = sendMail(HUMAN_AGENT_ID, body.to, body.subject, body.body, {
+        newSession: !!body.newSession,
+      });
+      if (r.error) {
+        json(res, 200, { ok: false, error: r.error });
+      } else {
+        json(res, 200, { ok: true, messageId: r.messageId });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/broadcast") {
+      const body = await readJsonBody(req);
+      const r = broadcastMail(HUMAN_AGENT_ID, body.subject, body.body);
+      json(res, 200, { ok: true, recipients: r.recipients });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/archive") {
+      const body = await readJsonBody(req);
+      const ok = archiveHumanMessage(body.id);
+      json(res, 200, { ok });
+      return;
+    }
+
+    json(res, 404, { error: "not found" });
+  } catch (e) {
+    json(res, 500, { error: e?.message ?? String(e) });
+  }
+});
+
+httpServer.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    log(`Mail UI: port ${UI_PORT} in use — UI disabled (set PI_MAIL_UI_PORT to change)`);
+  } else {
+    log(`Mail UI error: ${err.message}`);
+  }
+});
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 // Ensure dirs exist
 fs.mkdirSync(AGENT_DIR, { recursive: true });
+
+// Restore history before serving (so the UI shows prior mail immediately)
+loadHistory();
 
 // Single-instance guard: if a live daemon already owns the socket, exit
 // quietly instead of stealing it. Without this, concurrent spawn attempts
@@ -419,6 +680,11 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
+// Start the web UI. Non-fatal if it fails (the mail daemon still works).
+httpServer.listen(UI_PORT, UI_HOST, () => {
+  log(`Mail UI: http://${UI_HOST}:${UI_PORT}`);
+});
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 function cleanup() {
@@ -429,6 +695,14 @@ function cleanup() {
   try {
     fs.unlinkSync(PID_FILE);
   } catch {}
+  // Flush any pending history write before exiting.
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    try {
+      fs.writeFileSync(HISTORY_FILE, JSON.stringify(messageLog));
+    } catch {}
+  }
   process.exit(0);
 }
 
