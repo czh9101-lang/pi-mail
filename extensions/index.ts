@@ -331,6 +331,15 @@ export default function (pi: ExtensionAPI) {
   let nameCustomized = false;
   // Track whether agentId was restored from a previous session (prevents double-counting on reload)
   let agentIdRestored = false;
+  /**
+   * Who dispatched the task the agent is currently working on, when it arrived
+   * via mail (from the human operator or another agent). `null` means the
+   * operator is driving directly over the TUI. Drives the "channel" guidance
+   * injected in before_agent_start, so the agent knows whether to reply via
+   * mail or respond in place. Set when a mail triggers a turn; cleared when the
+   * operator types directly in the TUI (see the `input` handler).
+   */
+  let mailTaskSender: { name: string; id: string } | null = null;
   let mailbox: MailMessage[] = [];
   let connected = false;
   // Reconnect driver: exponential backoff that keeps retrying instead of
@@ -419,6 +428,10 @@ export default function (pi: ExtensionAPI) {
         if (mailbox.some((m) => m.id === msg.id)) return; // already known
         mailbox.push(msg);
         updateStatus();
+        // Remember who dispatched this task so the agent knows to reply via
+        // mail (not via ask_user_question / the TUI). Cleared when the operator
+        // types directly in the TUI again (see the `input` handler).
+        mailTaskSender = { name: msg.fromName, id: msg.fromId };
         try {
           // newSession flag: orchestrator wants a fresh session before this task
           if (msg.newSession) {
@@ -438,7 +451,9 @@ export default function (pi: ExtensionAPI) {
             : `📬 **Mail** from **${msg.fromName}** (${msg.fromId.slice(0, 8)}): "${msg.subject}"`;
           const footer = msg.broadcast
             ? `This is a broadcast message. Only take action if this concerns you.`
-            : `Please handle this mail and use \`mail_mark_read\` to archive it when done.`;
+            : `Please handle this mail and use \`mail_mark_read\` to archive it when done. ` +
+              `This is a mail-driven task: the operator is not at your TUI. ` +
+              `When complete (or if you have a question), reply to **${msg.fromName}** via \`mail_send\` — do NOT use \`ask_user_question\`.`;
           const content = [
             header,
             `Date: ${time} | ID: ${msg.id.slice(0, 8)}`,
@@ -508,6 +523,7 @@ export default function (pi: ExtensionAPI) {
               client?.request({ type: "mark_read", messageId: m.id }).catch(() => {});
             }
             mailbox = mailbox.filter((m) => !m.newSession);
+            mailTaskSender = { name: msg.fromName, id: msg.fromId };
             const kickoff = msg.body?.trim() || "";
             pi.sendUserMessage(`/new-task ${kickoff}`.trimEnd(), { deliverAs: "followUp" });
           }
@@ -586,6 +602,17 @@ export default function (pi: ExtensionAPI) {
 
   // ── Mail injection ──────────────────────────────────────────────────────────
 
+  // When the operator types directly in the TUI, the current task is no
+  // longer mail-driven — clear the channel marker so before_agent_start tells
+  // the agent to reply in place (and that ask_user_question is fine again).
+  // Extension-injected messages (mail kickoffs, /new-task) keep the marker.
+  pi.on("input", async (event, _ctx) => {
+    if (event.source === "interactive") {
+      mailTaskSender = null;
+    }
+    return { action: "continue" };
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
     latestCtx = ctx;
     updateStatus(ctx);
@@ -607,9 +634,31 @@ export default function (pi: ExtensionAPI) {
       `4. Keep it short (<60 chars) and factual — branch name, issue key, and action are ideal.\n` +
       `Do NOT skip status updates — the orchestrator relies on them to coordinate work.`;
 
+    // Tell the agent which channel the current task arrived on, so it knows
+    // whether to reply via mail (operator/agent not at the TUI) or respond in
+    // place. mailTaskSender is set when a mail triggers the turn and cleared
+    // when the operator types directly in the TUI (see the `input` handler).
+    const channelGuidance = mailTaskSender
+      ? (
+        `\n\n## Current task channel: mail\n` +
+        `This task was dispatched to you via pi-mail from "${mailTaskSender.name}" (${mailTaskSender.id.slice(0, 8)}). ` +
+        `The operator is NOT sitting at your TUI — they only see output you send as mail.\n` +
+        `- When the task is complete: reply with \`mail_send\` to "${mailTaskSender.name}" with a concise summary, then archive the original with \`mail_mark_read\`.\n` +
+        `- If you have a question or hit a blocker: ask via \`mail_send\` to "${mailTaskSender.name}". Do NOT use the \`ask_user_question\` tool — there is no one at the TUI to answer it.\n` +
+        (mailTaskSender.name === "human"
+          ? `- "human" is the operator via the web UI; replies to "human" appear in their inbox.\n`
+          : `- "${mailTaskSender.name}" is another agent in the federation.\n`)
+      )
+      : (
+        `\n\n## Current task channel: direct (TUI)\n` +
+        `The operator is communicating with you directly over the TUI. Do NOT send mail (\`mail_send\` / \`mail_broadcast\`) to report on this task — respond here directly. ` +
+        `You may use the \`ask_user_question\` tool when you need clarification. ` +
+        `Only reach for the mail tools if you are participating in a federated multi-agent workflow (see the mail-orchestrator skill).`
+      );
+
     const unread = mailbox.filter((m) => !m.read);
     if (unread.length === 0) {
-      return { systemPrompt: event.systemPrompt + identityGuidance };
+      return { systemPrompt: event.systemPrompt + identityGuidance + channelGuidance };
     }
 
     const plural = unread.length === 1 ? "" : "s";
@@ -630,6 +679,7 @@ export default function (pi: ExtensionAPI) {
       systemPrompt:
         event.systemPrompt +
         identityGuidance +
+        channelGuidance +
         `\n\nYou currently have ${unread.length} unread mail message${plural}${broadcastNote}. ` +
         `Check your inbox with mail_list when relevant to the current task.`,
     };

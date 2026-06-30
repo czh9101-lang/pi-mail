@@ -63,6 +63,26 @@ its inbox is the slice of the persisted message history addressed to it.
   mail (including the `newSession` flag, which starts a fresh session on the
   recipient).
 
+### How agents reply: mail channel vs direct TUI
+
+Agents can tell whether the task they're working on arrived via mail or
+through the TUI you're driving directly:
+
+- **Mail-driven task** (a `📬 Mail` message from `human` or another agent is in
+  the agent's context): the agent replies via `mail_send` to the sender when
+  done, and asks questions via `mail_send` instead of `ask_user_question` —
+  because no one is at the TUI to answer a prompt. Your reply lands back in the
+  web UI inbox.
+- **Direct TUI task** (you're typing to the agent in the terminal): the agent
+  responds in place and does **not** send mail for that task; `ask_user_question`
+  works as normal.
+
+The extension signals this to the agent each turn via a `## Current task
+channel:` header in the system prompt (`mail` or `direct (TUI)`), and the
+mail-orchestrator skill documents the same rule. So when you dispatch a task
+from the web UI, you can expect the result back as mail — and when you're
+pairing in the terminal, the agent stays in the terminal.
+
 ### Views
 
 1. **Agents** — live table of every connected agent: name, project (cwd),

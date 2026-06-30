@@ -35,6 +35,51 @@ If you catch yourself implementing something, stop. Dispatch it.
 
 ---
 
+## 0. The Human / Operator as a Participant
+
+The federation is not just agents. A **human operator** is a first-class
+participant, visible in `mail_list_agents` as a fixed, always-present agent:
+
+- **name:** `human`
+- **id:** `00000000` (full id `00000000-0000-0000-0000-000000000000`)
+
+The operator sends and receives mail through the **web UI** (the daemon serves
+a console, default port 1994), **not** from your TUI. They will mail you a task
+and then walk away — your reply only reaches them if you send it as mail.
+
+### Channel: mail vs direct TUI — decide before you reply
+
+Every task arrives on one of two channels. The extension tells you which one
+via a `## Current task channel:` header it injects into your system prompt each
+turn — so **every** agent (workers included, even without this skill) gets
+the rule. Read it before deciding how to reply:
+
+| Channel | How to recognise it | How to reply |
+|---------|---------------------|--------------|
+| **mail** | A `📬 Mail` message from `human` (or another agent) is in your context/inbox, **or** your prompt says `Current task channel: mail`. | Reply with `mail_send` to the **sender**. On completion, send a concise summary and `mail_mark_read` the original. On a question or blocker, ask via `mail_send`. **Never use `ask_user_question`** — there is no one at the TUI to answer it. |
+| **direct (TUI)** | The operator is talking to you in the terminal; your prompt says `Current task channel: direct (TUI)`. | Respond here in the TUI. **Do not send mail** (`mail_send`/`mail_broadcast`) to report on this task. Use `ask_user_question` freely for clarification. |
+
+**Rules of thumb:**
+- If a `📬 Mail` message (especially `From: human`) is what you're acting on,
+  you're on the **mail** channel — mail back your result.
+- If there's no mail message and the operator is typing to you directly, you're
+  on the **TUI** channel — answer in place, no mail.
+- When unsure which channel a response belongs to, mirror the channel the
+  request arrived on.
+- The only time you reach for mail while on the TUI channel is when you're
+  genuinely participating in a federated multi-agent workflow (dispatching to
+  / hearing from workers) — never to report the TUI task itself to the operator.
+
+### When the human dispatches a task to you (orchestrator)
+
+If `human` mails you a request, treat them like any other requester:
+1. Decompose and dispatch to workers exactly as usual.
+2. Synthesize the workers' results.
+3. **Reply to `human` via `mail_send`** with the synthesis — that is the only
+   way the operator sees it. Do not assume they are watching your TUI.
+
+---
+
 ## 1. Identity & Status — Do This First
 
 Before any work, set a readable name and a current status so the federation
@@ -324,14 +369,17 @@ mail_send({ to: "worker-b", subject: "Task B", body: "...", newSession: true })
 
 You own the final output. Workers produce drafts.
 
-Before reporting to the user or closing the loop:
+Before reporting to the requester (the human, or an orchestrator that
+ dispatched to you) or closing the loop:
 - [ ] Cross-check worker claims for internal consistency
 - [ ] If output is suspicious, send a dedicated **reviewer worker** to verify
 - [ ] Confirm open questions were answered, not silently skipped
 - [ ] If multiple workers touched related areas — dispatch a conflict-check worker
 - [ ] Never read or validate files directly yourself — send a scout/reviewer worker
 
-The only thing you write yourself is the final summary to the user.
+The only thing you write yourself is the final summary to the requester.
+If the original task came from `human` (mail channel), deliver that summary
+with `mail_send` to `human` — not in the TUI.
 
 Only after synthesis is complete:
 ```typescript
