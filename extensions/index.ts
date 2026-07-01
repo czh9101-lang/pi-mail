@@ -632,7 +632,11 @@ export default function (pi: ExtensionAPI) {
       `2. When you finish or go idle: set status to "idle" or clear it.\n` +
       `3. Update status whenever your focus shifts to something meaningfully different.\n` +
       `4. Keep it short (<60 chars) and factual — branch name, issue key, and action are ideal.\n` +
-      `Do NOT skip status updates — the orchestrator relies on them to coordinate work.`;
+      `Do NOT skip status updates — the orchestrator relies on them to coordinate work.\n` +
+      `\nThe federation also has a shared kanban task board (optionally synced two-way with a Jira sprint). ` +
+      `Tools: board_list_tasks, board_get_task, board_move_task, board_comment_task, board_assign_task, board_create_task, board_split_task, board_update_task, board_flag_task. ` +
+      `If a task is assigned to you (you'll get it as mail), work it via these tools: move it as you progress, comment on findings, and follow any column instructions. ` +
+      `If a task is unclear, flag it with board_flag_task (with your questions) instead of guessing; if it's too big, subdivide it with board_split_task.`;
 
     // Tell the agent which channel the current task arrived on, so it knows
     // whether to reply via mail (operator/agent not at the TUI) or respond in
@@ -1401,6 +1405,397 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
         };
+      }
+    },
+  });
+
+  // ── Task board tools ────────────────────────────────────────────────────────
+  //
+  // The daemon hosts a shared kanban board (optionally two-way synced with a
+  // Jira sprint). These tools let any agent read and work the board; the daemon
+  // handles Jira transitions/comments and mails assignees on assignment/moves.
+
+  interface BoardColumn {
+    id: string;
+    name: string;
+    jiraStatus: string | null;
+    instructions: string;
+  }
+
+  interface BoardTask {
+    id: string;
+    key: string | null;
+    origin: "jira" | "local";
+    summary: string;
+    description: string;
+    url: string | null;
+    jiraStatus: string | null;
+    columnId: string;
+    assignee: string | null;
+    priority: string | null;
+    issueType: string | null;
+    parentId: string | null;
+    parentKey: string | null;
+    flagged: { by: string; reason: string; ts: number } | null;
+    updatedAt: number;
+    activity: Array<{ ts: number; who: string; text: string }>;
+  }
+
+  interface BoardStateResp {
+    type: string;
+    columns?: BoardColumn[];
+    tasks?: BoardTask[];
+    jiraConfigured?: boolean;
+    lastSync?: number;
+    syncError?: string | null;
+    message?: string;
+  }
+
+  const errText = (err: unknown) => ({
+    content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+  });
+  const notConnected = { content: [{ type: "text" as const, text: "❌ Not connected to mail daemon" }] };
+
+  async function fetchBoard(): Promise<BoardStateResp> {
+    if (!connected || !client) throw new Error("Not connected to mail daemon");
+    const resp = await client.request<BoardStateResp>({ type: "board_state" });
+    if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error");
+    return resp;
+  }
+
+  function taskLine(t: BoardTask): string {
+    const key = t.key ? `${t.key} ` : "";
+    const who = t.assignee ? ` → ${t.assignee}` : "";
+    const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : "";
+    const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : "";
+    const flag = t.flagged ? ` ⚠unclear` : "";
+    return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${flag}`;
+  }
+
+  /** Result formatting shared by board mutation tools. */
+  function boardOpResult(
+    resp: { type: string; warning?: string; message?: string; task?: BoardTask },
+    okText: string
+  ) {
+    if (resp.type === "error") {
+      return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
+    }
+    const warn = resp.warning ? `\n⚠️ ${resp.warning}` : "";
+    return { content: [{ type: "text" as const, text: `✅ ${okText}${warn}` }], details: { task: resp.task } };
+  }
+
+  pi.registerTool({
+    name: "board_list_tasks",
+    label: "Board: Tasks",
+    description:
+      "List all tasks on the shared kanban task board, grouped by column. " +
+      "Shows task id, Jira key, summary, assignee and Jira status. Use 'mine: true' to only see tasks assigned to you.",
+    promptSnippet: "List tasks on the shared task board",
+    promptGuidelines: [
+      "Use board_list_tasks to see sprint/board work, e.g. when asked what to work on or to check task state.",
+    ],
+    parameters: Type.Object({
+      mine: Type.Optional(Type.Boolean({ description: "Only show tasks assigned to you" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      try {
+        const b = await fetchBoard();
+        let tasks = b.tasks ?? [];
+        if (params.mine) tasks = tasks.filter((t) => t.assignee === agentName);
+        const lines: string[] = [];
+        for (const col of b.columns ?? []) {
+          const inCol = tasks.filter((t) => t.columnId === col.id);
+          if (params.mine && inCol.length === 0) continue;
+          const jira = col.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)";
+          lines.push(`▌ ${col.name}${jira} — ${inCol.length} task${inCol.length === 1 ? "" : "s"}`);
+          if (col.instructions) lines.push(`  ↳ instructions: ${col.instructions.split("\n")[0].slice(0, 100)}…`);
+          for (const t of inCol) lines.push(taskLine(t));
+        }
+        const sync = b.jiraConfigured
+          ? b.syncError
+            ? `⚠️ Jira sync error: ${b.syncError}`
+            : `Jira sync: last ${b.lastSync ? new Date(b.lastSync).toLocaleString() : "never"}`
+          : "Jira: not configured (board-only mode)";
+        return {
+          content: [{ type: "text", text: `📋 Task board — ${tasks.length} task(s)\n${sync}\n\n${lines.join("\n")}` }],
+          details: { columns: b.columns, tasks },
+        };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_get_task",
+    label: "Board: Task",
+    description: "Get full details of one board task by id (8-char prefix ok) or Jira key: description, column, assignee, activity log.",
+    promptSnippet: "Read a board task in full",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix (from board_list_tasks) or Jira key (e.g. PROJ-123)" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      try {
+        const b = await fetchBoard();
+        const s = params.taskId.toLowerCase();
+        const t = (b.tasks ?? []).find(
+          (x) => x.id === params.taskId || x.id.startsWith(params.taskId) || (x.key && x.key.toLowerCase() === s)
+        );
+        if (!t) return { content: [{ type: "text", text: `Task not found: ${params.taskId}. Run board_list_tasks first.` }] };
+        const col = (b.columns ?? []).find((c) => c.id === t.columnId);
+        const lines = [
+          `Task:     ${t.key ? `[${t.key}] ` : ""}${t.summary}`,
+          `Id:       ${t.id}`,
+          `Column:   ${col?.name ?? t.columnId}${col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)"}`,
+          `Assignee: ${t.assignee ?? "—"}`,
+          `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
+          ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
+          ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
+          ...(t.url ? [`Jira:     ${t.url}`] : []),
+          "─".repeat(40),
+          t.description || "(no description)",
+        ];
+        const children = (b.tasks ?? []).filter((x) => x.parentId === t.id || (t.key && x.parentKey === t.key));
+        if (children.length) {
+          lines.push("", "## Subtasks");
+          for (const c of children) lines.push(taskLine(c));
+        }
+        if (col?.instructions) lines.push("", `## Column instructions ("${col.name}")`, col.instructions);
+        if (t.activity?.length) {
+          lines.push("", "## Activity");
+          for (const a of t.activity.slice(-15)) {
+            lines.push(`- ${new Date(a.ts).toLocaleString()} — ${a.who}: ${a.text}`);
+          }
+        }
+        return { content: [{ type: "text", text: lines.join("\n") }], details: { task: t } };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_move_task",
+    label: "Board: Move",
+    description:
+      "Move a board task to another column. Moving into a Jira-mapped column also transitions the Jira issue. " +
+      "Moving a task assigned to someone else notifies them by mail (including the column's instructions).",
+    promptSnippet: "Move a task on the shared board",
+    promptGuidelines: [
+      "Move your assigned board task as you progress: to the in-progress column when starting, and onward when done.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      column: Type.String({ description: "Target column name or id (see board_list_tasks)" }),
+      note: Type.Optional(Type.String({ description: "Short note recorded in the task's activity log" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; warning?: string; message?: string; task?: BoardTask }>(
+          { type: "board_move", taskId: params.taskId, column: params.column, note: params.note },
+          30_000
+        );
+        return boardOpResult(resp, `Moved ${resp.task?.key ?? params.taskId} → ${params.column}`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_comment_task",
+    label: "Board: Comment",
+    description:
+      "Add a comment to a board task's activity log. For Jira-synced tasks the comment is also posted to the Jira issue.",
+    promptSnippet: "Comment on a board task",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      text: Type.String({ description: "Comment text" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; warning?: string; message?: string; task?: BoardTask }>(
+          { type: "board_comment", taskId: params.taskId, text: params.text },
+          30_000
+        );
+        return boardOpResult(resp, `Comment added to ${resp.task?.key ?? params.taskId}`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_assign_task",
+    label: "Board: Assign",
+    description:
+      "Assign a board task to an agent (by name, from mail_list_agents). The assignee is mailed the full task package " +
+      "including the column's instructions. Pass an empty assignee to unassign.",
+    promptSnippet: "Assign a board task to an agent",
+    promptGuidelines: [
+      "When orchestrating, assign board tasks instead of ad-hoc mail so progress is visible on the board.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      assignee: Type.String({ description: "Agent name to assign (empty string to unassign)" }),
+      newSession: Type.Optional(Type.Boolean({
+        description: "If true, the assignee starts a fresh session (cleared context) for this task. Recommended for new, unrelated tasks.",
+      })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; warning?: string; message?: string; task?: BoardTask }>(
+          { type: "board_assign", taskId: params.taskId, assignee: params.assignee, newSession: params.newSession },
+          30_000
+        );
+        const who = params.assignee.trim() || "(unassigned)";
+        return boardOpResult(resp, `${resp.task?.key ?? params.taskId} assigned to ${who}`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_create_task",
+    label: "Board: Create",
+    description:
+      "Create a new task on the shared board. With 'parent' it becomes a subtask; when the parent is a Jira issue " +
+      "(or inJira is true) a real Jira issue is created and kept in sync. Otherwise the task is board-only.",
+    promptSnippet: "Create a task on the shared board",
+    parameters: Type.Object({
+      summary: Type.String({ description: "One-line task summary" }),
+      description: Type.Optional(Type.String({ description: "Full task description" })),
+      column: Type.Optional(Type.String({ description: "Column name or id (defaults to the parent's column, else the first column)" })),
+      parent: Type.Optional(Type.String({ description: "Parent task id prefix or Jira key — makes this a subtask" })),
+      inJira: Type.Optional(Type.Boolean({ description: "Create a Jira issue for a top-level task (needs a project key in board settings)" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; message?: string; task?: BoardTask }>(
+          {
+            type: "board_create",
+            summary: params.summary,
+            description: params.description,
+            column: params.column,
+            parent: params.parent,
+            inJira: params.inJira,
+          },
+          30_000
+        );
+        const jiraNote = resp.task?.key ? ` (Jira: ${resp.task.key})` : "";
+        return boardOpResult(resp, `Created task [${resp.task?.id.slice(0, 8)}]${jiraNote} "${params.summary}"`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_split_task",
+    label: "Board: Split",
+    description:
+      "Subdivide a board task into subtasks. Each subtask lands in the parent's column; for Jira parents they are " +
+      "created as real Jira sub-tasks. Use when a task is too big for one pass — then assign the subtasks out.",
+    promptSnippet: "Split a board task into subtasks",
+    promptGuidelines: [
+      "Prefer board_split_task over ad-hoc notes when decomposing a board task — subtasks stay visible and assignable.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Parent task id prefix or Jira key" }),
+      subtasks: Type.Array(
+        Type.Object({
+          summary: Type.String({ description: "Subtask summary" }),
+          description: Type.Optional(Type.String({ description: "Subtask description" })),
+        }),
+        { description: "Subtasks to create", minItems: 1 }
+      ),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      const made: string[] = [];
+      const failed: string[] = [];
+      for (const s of params.subtasks) {
+        try {
+          const resp = await client.request<{ type: string; message?: string; task?: BoardTask }>(
+            { type: "board_create", summary: s.summary, description: s.description, parent: params.taskId },
+            30_000
+          );
+          if (resp.type === "error") failed.push(`"${s.summary}": ${resp.message}`);
+          else made.push(`[${resp.task?.id.slice(0, 8)}]${resp.task?.key ? ` ${resp.task.key}` : ""} ${s.summary}`);
+        } catch (err: unknown) {
+          failed.push(`"${s.summary}": ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      const lines = [
+        `${made.length ? "✅" : "❌"} Split ${params.taskId}: ${made.length}/${params.subtasks.length} subtask(s) created`,
+        ...made.map((m) => `  • ${m}`),
+        ...failed.map((f) => `  ❌ ${f}`),
+      ];
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "board_flag_task",
+    label: "Board: Flag",
+    description:
+      "Flag a board task as unclear (goal/scope/acceptance criteria ambiguous). The human operator is notified by mail " +
+      "with your reason. Use BEFORE starting work you'd otherwise have to guess at. Pass clear: true to remove the flag.",
+    promptSnippet: "Flag a board task as unclear",
+    promptGuidelines: [
+      "If an assigned board task is ambiguous, flag it with your questions instead of guessing.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      reason: Type.Optional(Type.String({ description: "What is unclear / your questions (required unless clearing)" })),
+      clear: Type.Optional(Type.Boolean({ description: "Remove the unclear flag instead of setting it" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; warning?: string; message?: string; task?: BoardTask }>(
+          { type: "board_flag", taskId: params.taskId, reason: params.reason, clear: params.clear },
+          30_000
+        );
+        return boardOpResult(
+          resp,
+          params.clear
+            ? `Cleared unclear flag on ${resp.task?.key ?? params.taskId}`
+            : `Flagged ${resp.task?.key ?? params.taskId} as unclear — operator notified`
+        );
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_update_task",
+    label: "Board: Update",
+    description:
+      "Update a board task's summary and/or description. For Jira-synced tasks the edit is also pushed to the Jira issue. " +
+      "Use this to make a vague task clear (e.g. after refining: goal, scope, acceptance criteria).",
+    promptSnippet: "Edit a board task",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      summary: Type.Optional(Type.String({ description: "New summary" })),
+      description: Type.Optional(Type.String({ description: "New description" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; message?: string; task?: BoardTask }>(
+          { type: "board_update", taskId: params.taskId, summary: params.summary, description: params.description },
+          30_000
+        );
+        return boardOpResult(resp, `Updated ${resp.task?.key ?? params.taskId}`);
+      } catch (err: unknown) {
+        return errText(err);
       }
     },
   });

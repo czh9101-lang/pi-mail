@@ -114,6 +114,48 @@
   .group { border-left: 2px solid var(--border); padding-left: 12px; margin: 6px 0 12px; }
   .group .gtitle { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
 
+  /* ── Task board ─────────────────────────────────────────────────────────── */
+  .board-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .board-toolbar .sync { color: var(--dim); font-size: 12px; }
+  .board-toolbar .sync.err { color: var(--error); }
+  .board { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 8px; }
+  .bcol { flex: 0 0 280px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .bcol .bhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .bcol .bhead .bname { font-weight: 600; font-size: 13px; }
+  .bcol .bhead .bcount { color: var(--muted); font-size: 12px; }
+  .badge.jira { color: var(--accent2); border-color: var(--accent); }
+  .badge.custom { color: var(--warning); border-color: var(--warning); }
+  .badge.flag { color: var(--error); border-color: var(--error); }
+  .badge.sub { color: var(--dim); }
+  .tcard.flagged { border-color: var(--error); }
+  .tcard.subtask { margin-left: 14px; border-left: 2px solid var(--border); }
+  .bcol .binstr { color: var(--dim); font-size: 11px; margin-bottom: 8px; white-space: pre-wrap; border-left: 2px solid var(--warning); padding-left: 8px; }
+  .tcard { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .tcard .tsum { font-size: 13px; cursor: pointer; }
+  .tcard .tkey { color: var(--accent2); font-size: 12px; margin-right: 6px; }
+  .tcard .tmeta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+  .tcard .assignee { font-size: 11px; color: var(--broadcast); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  .tcard .assignee.none { color: var(--muted); font-style: italic; border-style: dashed; }
+  .tcard select { background: var(--panel); color: var(--dim); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12px; max-width: 118px; }
+  .tcard .tdetail { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .tcard .tdesc { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #c9d1d9; max-height: 220px; overflow: auto; }
+  .tcard .tact { margin-top: 8px; }
+  .tcard .tact .a { font-size: 11px; color: var(--dim); margin-bottom: 3px; white-space: pre-wrap; }
+  .tcard .tact .a b { color: var(--text); font-weight: 600; }
+  .tcard textarea { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; min-height: 48px; margin-top: 6px; }
+  .board-settings label { display: block; color: var(--dim); font-size: 12px; margin: 8px 0 3px; }
+  .board-settings input, .board-settings textarea { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 14px; }
+  .board-settings .colrow { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--panel2); }
+  .board-settings .colrow .rr { display: flex; gap: 8px; margin-bottom: 6px; }
+  .board-settings .colrow .rr input { flex: 1; }
+  .board-settings .mini { padding: 4px 9px; min-height: 28px; font-size: 12px; }
+  .newtask { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .newtask input { flex: 1 1 240px; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 16px; }
+  @media (max-width: 640px) {
+    .bcol { flex: 0 0 86vw; }
+    .newtask input { flex-basis: 100%; }
+  }
+
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
@@ -165,6 +207,7 @@
   </div>
   <nav>
     <button data-tab="agents" class="active">Agents</button>
+    <button data-tab="board">Board</button>
     <button data-tab="mailbox">My Mailbox</button>
     <button data-tab="history">History</button>
   </nav>
@@ -175,10 +218,19 @@
 <script>
 "use strict";
 const HUMAN_ID = "00000000-0000-0000-0000-000000000000";
-let state = { agents: [], messages: [], human: { agentId: HUMAN_ID, agentName: "human" }, now: Date.now() };
+let state = { agents: [], messages: [], board: null, human: { agentId: HUMAN_ID, agentName: "human" }, now: Date.now() };
 let currentTab = "agents";
 let historyAgentId = "";        // selected agent in History tab
 let compose = { to: "", subject: "", body: "", newSession: false }; // sticky compose draft
+// Board UI state that must survive re-renders (poll every 3s)
+let boardUi = {
+  expanded: new Set(),          // task ids with detail open
+  settingsOpen: false,
+  freshSession: true,           // newSession flag used when assigning
+  newTask: { summary: "", column: "" },
+  draftComments: {},            // taskId -> comment draft
+  colsDraft: null,              // unsaved column edits while settings are open
+};
 let pollTimer = null;
 let lastSig = null;
 
@@ -238,7 +290,7 @@ async function refresh() {
     //  - never re-render while the user is focused inside <main> (typing),
     //  - and skip when nothing actually changed.
     const focusedInMain = document.activeElement && main.contains(document.activeElement);
-    const sig = JSON.stringify([state.agents, state.messages]);
+    const sig = JSON.stringify([state.agents, state.messages, state.board]);
     if (focusedInMain) { lastSig = sig; return; }
     if (sig !== lastSig) { lastSig = sig; render(); }
   } catch (e) {
@@ -259,6 +311,7 @@ async function post(path, payload) {
 // ── Rendering ────────────────────────────────────────────────────────────────
 function render() {
   if (currentTab === "agents") renderAgents();
+  else if (currentTab === "board") renderBoard();
   else if (currentTab === "mailbox") renderMailbox();
   else if (currentTab === "history") renderHistory();
 }
@@ -332,6 +385,320 @@ function renderAgents() {
   }
   table.appendChild(tbody); wrap.appendChild(table); card.appendChild(wrap);
   main.appendChild(card);
+}
+
+// ── Task board ───────────────────────────────────────────────────────────────
+
+async function boardPost(path, payload, okMsg) {
+  const r = await post(path, payload);
+  if (r.ok) {
+    if (r.warning) toast("⚠ " + r.warning, true);
+    else if (okMsg) toast(okMsg);
+    await refresh();
+  } else {
+    toast("❌ " + (r.error || "failed"), true);
+  }
+  return r;
+}
+
+function agentNames() {
+  return state.agents.filter(a => !a.isHuman).map(a => a.agentName).sort();
+}
+
+function isSubtask(t) { return !!(t.parentId || t.parentKey); }
+function childrenOf(t, board) {
+  return (board.tasks ?? []).filter(x => x.parentId === t.id || (t.key && x.parentKey === t.key));
+}
+
+function taskCard(t, board) {
+  const card = el("div", "tcard" + (t.flagged ? " flagged" : "") + (isSubtask(t) ? " subtask" : ""));
+  const sum = el("div", "tsum");
+  if (t.key) {
+    const k = el(t.url ? "a" : "span", "tkey", "[" + t.key + "]");
+    if (t.url) { k.href = t.url; k.target = "_blank"; k.addEventListener("click", e => e.stopPropagation()); }
+    sum.appendChild(k);
+  }
+  sum.appendChild(document.createTextNode(t.summary));
+  sum.addEventListener("click", () => {
+    if (boardUi.expanded.has(t.id)) boardUi.expanded.delete(t.id); else boardUi.expanded.add(t.id);
+    renderBoard();
+  });
+  card.appendChild(sum);
+
+  const meta = el("div", "tmeta");
+  meta.appendChild(el("span", "assignee" + (t.assignee ? "" : " none"), t.assignee || "unassigned"));
+  if (t.flagged) {
+    const fb = el("span", "badge flag", "⚠ unclear");
+    fb.title = "Flagged by " + t.flagged.by + ": " + t.flagged.reason;
+    meta.appendChild(fb);
+  }
+  if (isSubtask(t)) meta.appendChild(el("span", "badge sub", "↳ " + (t.parentKey || "subtask")));
+  const kids = childrenOf(t, board);
+  if (kids.length) {
+    const doneCol = board.columns.length ? board.columns[board.columns.length - 1].id : null;
+    meta.appendChild(el("span", "badge sub", kids.filter(k => k.columnId === doneCol).length + "/" + kids.length + " sub"));
+  }
+  if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
+  if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
+  if (t.priority) meta.appendChild(el("span", "badge", t.priority));
+
+  // Move select
+  const mv = el("select");
+  for (const c of board.columns) {
+    const o = el("option"); o.value = c.id; o.textContent = c.name;
+    if (c.id === t.columnId) o.selected = true;
+    mv.appendChild(o);
+  }
+  mv.title = "Move to column";
+  mv.addEventListener("change", () => boardPost("/api/board/move", { taskId: t.id, column: mv.value }, "Moved"));
+  meta.appendChild(mv);
+
+  // Assign select
+  const as = el("select");
+  const optNone = el("option"); optNone.value = ""; optNone.textContent = "→ assign…"; as.appendChild(optNone);
+  const optClear = el("option"); optClear.value = "__unassign__"; optClear.textContent = "(unassign)"; as.appendChild(optClear);
+  for (const n of agentNames()) {
+    const o = el("option"); o.value = n; o.textContent = n;
+    if (n === t.assignee) o.selected = true;
+    as.appendChild(o);
+  }
+  as.title = "Assign to agent (mails them the task)";
+  as.addEventListener("change", () => {
+    if (!as.value) return;
+    const assignee = as.value === "__unassign__" ? "" : as.value;
+    boardPost("/api/board/assign", { taskId: t.id, assignee, newSession: boardUi.freshSession },
+      assignee ? "Assigned to " + assignee + " (mailed)" : "Unassigned");
+  });
+  meta.appendChild(as);
+  card.appendChild(meta);
+
+  if (boardUi.expanded.has(t.id)) {
+    const det = el("div", "tdetail");
+    if (t.flagged) {
+      const fr = el("div", "binstr", "⚠ Flagged unclear by " + t.flagged.by + " (" + fmtTime(t.flagged.ts) + "):\n" + t.flagged.reason);
+      fr.style.borderLeftColor = "var(--error)";
+      det.appendChild(fr);
+    }
+    det.appendChild(el("div", "tdesc", t.description || "(no description)"));
+    if (t.activity && t.activity.length) {
+      const act = el("div", "tact");
+      act.appendChild(el("div", "gtitle", "Activity"));
+      for (const a of t.activity.slice(-12)) {
+        const row = el("div", "a");
+        const b = el("b", null, a.who); row.appendChild(b);
+        row.appendChild(document.createTextNode(" · " + fmtTime(a.ts) + "\n" + a.text));
+        act.appendChild(row);
+      }
+      det.appendChild(act);
+    }
+    const ta = el("textarea"); ta.placeholder = "Add a comment" + (t.origin === "jira" ? " (also posted to Jira)" : "") + "…";
+    ta.value = boardUi.draftComments[t.id] || "";
+    ta.addEventListener("input", () => boardUi.draftComments[t.id] = ta.value);
+    det.appendChild(ta);
+    const row = el("div", "row"); row.style.marginTop = "6px"; row.style.display = "flex"; row.style.gap = "8px";
+    const cbtn = el("button", "btn secondary mini", "Comment");
+    cbtn.addEventListener("click", async () => {
+      const text = ta.value.trim();
+      if (!text) return;
+      const r = await boardPost("/api/board/comment", { taskId: t.id, text }, "Comment added");
+      if (r.ok) { delete boardUi.draftComments[t.id]; }
+    });
+    row.appendChild(cbtn);
+    if (t.flagged) {
+      const clr = el("button", "btn secondary mini", "Clear ⚠ flag");
+      clr.addEventListener("click", () => boardPost("/api/board/flag", { taskId: t.id, clear: true }, "Flag cleared"));
+      row.appendChild(clr);
+    } else {
+      const flg = el("button", "btn secondary mini", "Flag ⚠ unclear");
+      flg.title = "Uses the comment box text as the reason";
+      flg.addEventListener("click", () => {
+        const reason = ta.value.trim() || "needs clarification";
+        boardPost("/api/board/flag", { taskId: t.id, reason }, "Flagged as unclear").then(r => { if (r.ok) delete boardUi.draftComments[t.id]; });
+      });
+      row.appendChild(flg);
+    }
+    const sub = el("button", "btn secondary mini", "＋ Subtask");
+    sub.addEventListener("click", () => {
+      const summary = prompt("Subtask summary" + (t.origin === "jira" ? " (created as a Jira sub-task)" : "") + ":");
+      if (summary && summary.trim()) boardPost("/api/board/create", { summary: summary.trim(), parent: t.id }, "Subtask created");
+    });
+    row.appendChild(sub);
+    det.appendChild(row);
+    card.appendChild(det);
+  }
+  return card;
+}
+
+/** Order a column's tasks so subtasks follow their parent when co-located. */
+function orderColumnTasks(tasks, board) {
+  const inCol = new Set(tasks.map(t => t.id));
+  const isTop = t => !isSubtask(t) || !(board.tasks ?? []).some(p =>
+    inCol.has(p.id) && (p.id === t.parentId || (t.parentKey && p.key === t.parentKey)));
+  const tops = tasks.filter(isTop).sort((a, b) => b.updatedAt - a.updatedAt);
+  const out = [];
+  for (const t of tops) {
+    out.push(t);
+    for (const c of tasks) {
+      if (c !== t && (c.parentId === t.id || (t.key && c.parentKey === t.key))) out.push(c);
+    }
+  }
+  return out;
+}
+
+function boardSettingsCard(board) {
+  const card = el("div", "card board-settings");
+  card.appendChild(el("h2", null, "Board settings"));
+
+  // Jira connection
+  card.appendChild(el("label", null, "Jira base URL (e.g. https://yourorg.atlassian.net)"));
+  const inUrl = el("input"); inUrl.value = board._cfg?.baseUrl ?? ""; card.appendChild(inUrl);
+  card.appendChild(el("label", null, "Jira account email"));
+  const inMail = el("input"); inMail.value = board._cfg?.email ?? ""; card.appendChild(inMail);
+  card.appendChild(el("label", null, "API token" + (board._cfg?.apiTokenSet ? " (set — leave blank to keep)" : "")));
+  const inTok = el("input"); inTok.type = "password"; inTok.placeholder = board._cfg?.apiTokenSet ? "••••••••" : "paste a Jira API token";
+  card.appendChild(inTok);
+  card.appendChild(el("label", null, "JQL (which issues to sync)"));
+  const inJql = el("input"); inJql.value = board._cfg?.jql ?? ""; card.appendChild(inJql);
+  card.appendChild(el("label", null, "Project key — used when creating top-level Jira issues from the board (e.g. PROJ)"));
+  const inProj = el("input"); inProj.value = board._cfg?.projectKey ?? ""; card.appendChild(inProj);
+
+  // Columns editor — draft lives in boardUi so poll re-renders don't wipe edits
+  card.appendChild(el("label", null, "Columns — order matters; blank Jira status = board-only column with instructions"));
+  const colWrap = el("div");
+  if (!boardUi.colsDraft) boardUi.colsDraft = board.columns.map(c => ({ ...c }));
+  const rows = boardUi.colsDraft;
+  const renderCols = () => {
+    colWrap.innerHTML = "";
+    rows.forEach((c, i) => {
+      const r = el("div", "colrow");
+      const rr = el("div", "rr");
+      const inName = el("input"); inName.value = c.name; inName.placeholder = "Column name";
+      inName.addEventListener("input", () => c.name = inName.value);
+      const inStatus = el("input"); inStatus.value = c.jiraStatus ?? ""; inStatus.placeholder = "Jira status (blank = board-only)";
+      inStatus.addEventListener("input", () => c.jiraStatus = inStatus.value);
+      rr.appendChild(inName); rr.appendChild(inStatus);
+      const up = el("button", "btn secondary mini", "↑");
+      up.addEventListener("click", () => { if (i > 0) { rows.splice(i - 1, 0, rows.splice(i, 1)[0]); renderCols(); } });
+      const down = el("button", "btn secondary mini", "↓");
+      down.addEventListener("click", () => { if (i < rows.length - 1) { rows.splice(i + 1, 0, rows.splice(i, 1)[0]); renderCols(); } });
+      const del = el("button", "btn secondary mini", "✕");
+      del.addEventListener("click", () => { rows.splice(i, 1); renderCols(); });
+      rr.appendChild(up); rr.appendChild(down); rr.appendChild(del);
+      r.appendChild(rr);
+      const inInstr = el("textarea"); inInstr.value = c.instructions ?? ""; inInstr.placeholder = "Instructions mailed to the assignee when a task lands here (optional)";
+      inInstr.addEventListener("input", () => c.instructions = inInstr.value);
+      r.appendChild(inInstr);
+      colWrap.appendChild(r);
+    });
+  };
+  renderCols();
+  card.appendChild(colWrap);
+
+  const btnRow = el("div", "row"); btnRow.style.display = "flex"; btnRow.style.gap = "8px"; btnRow.style.marginTop = "10px";
+  const addCol = el("button", "btn secondary", "+ Column");
+  addCol.addEventListener("click", () => { rows.push({ id: "", name: "New column", jiraStatus: null, instructions: "" }); renderCols(); });
+  const save = el("button", "btn", "Save settings");
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const r = await post("/api/board/config", {
+      config: { baseUrl: inUrl.value, email: inMail.value, apiToken: inTok.value, jql: inJql.value, projectKey: inProj.value },
+      columns: rows,
+    });
+    save.disabled = false;
+    if (r.ok) { toast("✅ Board settings saved — syncing"); delete boardCfgCache.cfg; boardUi.settingsOpen = false; boardUi.colsDraft = null; refresh(); }
+    else toast("❌ " + (r.error || "save failed"), true);
+  });
+  btnRow.appendChild(addCol); btnRow.appendChild(save);
+  card.appendChild(btnRow);
+  return card;
+}
+
+const boardCfgCache = {};
+async function ensureBoardCfg() {
+  if (!boardCfgCache.cfg) {
+    try { boardCfgCache.cfg = await (await fetch("/api/board/config", { cache: "no-store" })).json(); } catch { boardCfgCache.cfg = null; }
+  }
+  return boardCfgCache.cfg;
+}
+
+function renderBoard() {
+  main.innerHTML = "";
+  const board = state.board;
+  if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
+
+  // Toolbar
+  const bar = el("div", "board-toolbar");
+  const sync = el("span", "sync" + (board.syncError ? " err" : ""));
+  sync.textContent = board.jiraConfigured
+    ? (board.syncError ? "⚠ Jira sync error: " + board.syncError : "Jira sync · last " + (board.lastSync ? fmtTime(board.lastSync) : "never"))
+    : "Jira not configured — board-only mode (open Settings)";
+  bar.appendChild(sync);
+  const syncBtn = el("button", "btn secondary mini", "Sync now");
+  syncBtn.addEventListener("click", async () => {
+    syncBtn.disabled = true;
+    const r = await post("/api/board/sync", {});
+    syncBtn.disabled = false;
+    if (r.ok) { toast("🔄 Synced with Jira"); refresh(); } else toast("❌ " + (r.error || "sync failed"), true);
+  });
+  bar.appendChild(syncBtn);
+  const cbWrap = el("span", "checkbox");
+  const cb = el("input"); cb.type = "checkbox"; cb.id = "fs"; cb.checked = boardUi.freshSession;
+  cb.addEventListener("change", () => boardUi.freshSession = cb.checked);
+  const cbl = el("label", null, "fresh session on assign"); cbl.setAttribute("for", "fs"); cbl.style.margin = "0";
+  cbWrap.appendChild(cb); cbWrap.appendChild(cbl);
+  bar.appendChild(cbWrap);
+  const settingsBtn = el("button", "btn secondary mini", boardUi.settingsOpen ? "Close settings" : "⚙ Settings");
+  settingsBtn.addEventListener("click", async () => {
+    boardUi.settingsOpen = !boardUi.settingsOpen;
+    if (boardUi.settingsOpen) await ensureBoardCfg();
+    else boardUi.colsDraft = null; // discard unsaved column edits on close
+    renderBoard();
+  });
+  bar.appendChild(settingsBtn);
+  main.appendChild(bar);
+
+  // Settings
+  if (boardUi.settingsOpen) {
+    main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config }));
+  }
+
+  // New (local) task
+  const nt = el("div", "newtask");
+  const inSum = el("input"); inSum.placeholder = "New board-only task…"; inSum.value = boardUi.newTask.summary;
+  inSum.addEventListener("input", () => boardUi.newTask.summary = inSum.value);
+  const colPick = el("select", "agentpick");
+  for (const c of board.columns) {
+    const o = el("option"); o.value = c.id; o.textContent = c.name;
+    if (c.id === boardUi.newTask.column) o.selected = true;
+    colPick.appendChild(o);
+  }
+  colPick.addEventListener("change", () => boardUi.newTask.column = colPick.value);
+  const addBtn = el("button", "btn", "Add task");
+  addBtn.addEventListener("click", async () => {
+    const summary = boardUi.newTask.summary.trim();
+    if (!summary) { toast("Give the task a summary", true); return; }
+    const r = await boardPost("/api/board/create", { summary, column: colPick.value }, "Task created");
+    if (r.ok) { boardUi.newTask.summary = ""; inSum.value = ""; }
+  });
+  nt.appendChild(inSum); nt.appendChild(colPick); nt.appendChild(addBtn);
+  main.appendChild(nt);
+
+  // Kanban columns
+  const kb = el("div", "board");
+  for (const c of board.columns) {
+    const col = el("div", "bcol");
+    const head = el("div", "bhead");
+    head.appendChild(el("span", "bname", c.name));
+    head.appendChild(el("span", "badge " + (c.jiraStatus ? "jira" : "custom"), c.jiraStatus ? c.jiraStatus : "board-only"));
+    const tasks = orderColumnTasks((board.tasks ?? []).filter(t => t.columnId === c.id), board);
+    head.appendChild(el("span", "bcount", String(tasks.length)));
+    col.appendChild(head);
+    if (c.instructions) col.appendChild(el("div", "binstr", c.instructions));
+    if (!tasks.length) col.appendChild(el("div", "empty", "—"));
+    for (const t of tasks) col.appendChild(taskCard(t, board));
+    kb.appendChild(col);
+  }
+  main.appendChild(kb);
 }
 
 function messageRow(m, opts = {}) {

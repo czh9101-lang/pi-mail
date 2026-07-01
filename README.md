@@ -87,10 +87,12 @@ pairing in the terminal, the agent stays in the terminal.
 
 1. **Agents** — live table of every connected agent: name, project (cwd),
    status, context saturation, model, uptime, id. Auto-refreshes every 3 s.
-2. **My Mailbox** — your inbox (mail addressed to `human`, archiveable), your
+2. **Board** — kanban task board, optionally two-way synced with your current
+   Jira sprint. See [Task board](#task-board).
+3. **My Mailbox** — your inbox (mail addressed to `human`, archiveable), your
    outbox (mail you sent, with broadcasts grouped), and a compose form to send
    to a named agent or broadcast to all.
-3. **History** — pick any agent and see the full history of mail delivered to
+4. **History** — pick any agent and see the full history of mail delivered to
    it (direct + broadcast, including archived messages).
 
 ### Persistence
@@ -109,7 +111,70 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/send` | `{ to, subject, body, newSession? }` | `{ ok, messageId? \| error? }` |
 | `POST /api/broadcast` | `{ subject, body }` | `{ ok, recipients }` |
 | `POST /api/archive` | `{ id }` | `{ ok }` — archives a message in the human inbox |
+| `GET /api/board` | — | Board snapshot: `{ columns[], tasks[], jiraConfigured, lastSync, syncError }` |
+| `POST /api/board/move` | `{ taskId, column, note? }` | Move a task (Jira transition if the column is mapped) |
+| `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package |
+| `POST /api/board/comment` | `{ taskId, text }` | Comment (also posted to Jira for Jira tasks) |
+| `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`) |
+| `POST /api/board/update` | `{ taskId, summary?, description? }` | Edit summary/description (pushed to Jira for Jira tasks) |
+| `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
+| `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout |
+| `POST /api/board/sync` | — | Force a Jira sync now |
 
+## Task board
+
+The daemon hosts a shared kanban board for the whole federation, with optional
+**two-way Jira sync** for your current sprint:
+
+- **Pull**: every 60 s the daemon runs the configured JQL (default
+  `assignee = currentUser() AND sprint in openSprints()`) and mirrors those
+  issues as board tasks — including their **subtasks** (fetched via
+  `parent in (…)` even when the subtasks don't match the JQL) and **Jira
+  comments** (merged into the task's activity log, deduped). Remote status
+  changes move the cards; issues that leave the sprint disappear from the
+  board (except board-created ones, which are pinned).
+- **Push**: moving a task into a column that maps to a Jira status performs the
+  matching Jira transition. Board comments on Jira tasks are posted to the
+  issue. Summary/description edits are pushed to the issue. Agents can
+  **subdivide** a Jira task (`board_split_task`) — subtasks are created as real
+  Jira sub-tasks under the parent; top-level issues can be created with
+  `inJira: true` (uses the configured project key).
+
+Configure Jira in the UI (Board → ⚙ Settings): base URL
+(`https://yourorg.atlassian.net`), account email, an
+[API token](https://id.atlassian.com/manage-profile/security/api-tokens), and
+the JQL. Env vars `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_JQL`
+serve as defaults. Without Jira the board still works in board-only mode.
+State persists in `~/.pi/agent/mail-board.json`.
+
+### Columns — including ones Jira doesn't have
+
+Columns are fully editable in the UI. Each column either **maps to a Jira
+status** (`To Do`, `In Progress`, `Done`, …) or is **board-only** with custom
+**instructions** — e.g. the default `Refine` and `Review` columns. A task in a
+board-only column keeps its Jira status untouched; the instructions are mailed
+to the assignee whenever a task is assigned or moved there, which is what makes
+"drag it to Refine" an actionable request for an agent.
+
+### Assignment = mail
+
+Assigning a task (UI dropdown or `board_assign_task`) mails the assignee the
+full task package: description, column instructions, and the board-tool crib
+sheet. Moving someone else's task notifies them the same way. The "fresh
+session on assign" checkbox (default on) dispatches with `newSession: true`.
+
+### Clarity gate
+
+Every assignment mail tells the agent to first check the task is clear (goal,
+scope, acceptance criteria) and to **ask instead of guess**: post questions as
+a comment, `board_flag_task` the card (red ⚠ unclear badge in the UI + a mail
+to you), and wait. Once resolved, the refined spec goes into the description
+via `board_update_task` (pushed to Jira) and the flag is cleared. The UI has
+Flag/Clear-flag buttons on each card.
+
+Agents work tasks with the `board_*` tools (below); the `task-board` skill
+teaches them the workflow, and the `mail-orchestrator` skill tells
+orchestrators to dispatch via `board_assign_task` for board work.
 
 ## Setup
 
@@ -147,6 +212,15 @@ needed.
 | `mail_list_agents` | List agents with status, context %, and uptime |
 | `mail_set_name <name>` | Set your display name |
 | `mail_set_status <status>` | Set your status line (empty string clears it) |
+| `board_list_tasks` | Task board overview grouped by column (`mine: true` filters to you) |
+| `board_get_task <id>` | Full task detail: description, column instructions, subtasks, activity |
+| `board_move_task` | Move a task to a column (Jira transition if mapped; notifies assignee) |
+| `board_comment_task` | Comment on a task (posted to Jira for Jira tasks) |
+| `board_assign_task` | Assign to an agent — assignee gets the task package by mail |
+| `board_create_task` | Create a task; `parent` makes it a subtask (real Jira sub-task under Jira parents), `inJira` creates a top-level Jira issue |
+| `board_split_task` | Subdivide a task into subtasks in one call |
+| `board_update_task` | Edit summary/description (pushed to Jira for Jira tasks) |
+| `board_flag_task` | Flag a task as ⚠ unclear with questions (operator notified); `clear: true` removes it |
 
 ### mail_send parameters
 
@@ -237,6 +311,7 @@ pi-mail/                              Package root
 │   ├── daemon.mjs                    Singleton daemon (plain Node.js, no build step) — also serves the web UI
 │   └── ui.html                       Web UI single-page app (served by the daemon)
 ├── skills/
-│   └── mail-orchestrator/SKILL.md    Orchestrator skill, shipped with the plugin
+│   ├── mail-orchestrator/SKILL.md    Orchestrator skill, shipped with the plugin
+│   └── task-board/SKILL.md           Task board workflow skill (agents + orchestrators)
 └── README.md                         This file
 ```

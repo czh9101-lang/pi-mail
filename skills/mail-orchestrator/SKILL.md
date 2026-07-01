@@ -140,6 +140,24 @@ Inbox check cadence:
 
 ---
 
+## 3b. The Task Board — Prefer It Over Ad-Hoc Task Mail
+
+The federation shares a kanban **task board** (see the `task-board` skill),
+optionally two-way synced with the human's current Jira sprint. When the work
+you're dispatching corresponds to a board task:
+
+- Dispatch with `board_assign_task({ taskId, assignee, newSession: true })`
+  instead of hand-writing a task mail — the worker automatically receives the
+  full task package (description + column instructions).
+- Drive the pipeline with `board_move_task` (e.g. vague ticket → `Refine`
+  column, finished work → `Review` column with a reviewer assigned).
+- Monitor with `board_list_tasks`; workers' comments and moves show up in the
+  task's activity (and in Jira, for Jira-synced tasks).
+
+Ad-hoc `mail_send` dispatch remains right for work that isn't a board task.
+
+---
+
 ## 4. Task Decomposition Before Dispatch
 
 Before touching `mail_send`, decompose the work yourself. Workers are dumb —
