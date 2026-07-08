@@ -243,4 +243,35 @@ export function shellQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
-export { schedulePersist, loadHistory, flushHistory };
+export { schedulePersist, loadHistory, flushHistory, startHeartbeat, PING_INTERVAL_MS };
+
+// ── Heartbeat ─────────────────────────────────────────────────────────────────
+
+const PING_INTERVAL_MS = 5_000;
+
+/** Server-initiated ping-pong: send {type:"ping"} every PING_INTERVAL_MS;
+ *  if no pong by the next tick, terminate the connection (keeps the agents map
+ *  honest). The mailbox is preserved so a reconnecting agent reclaims mail. */
+function startHeartbeat(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  const tick = () => {
+    const a = agents.get(agentId);
+    if (!a) return; // already removed
+
+    if (a.pongPending) {
+      log(`${a.info.agentName} (${agentId.slice(0, 8)}) timed out — removing`);
+      clearInterval(a.pingTimer);
+      a.conn.destroy();
+      agents.delete(agentId);
+      // Keep mailbox so the agent can reclaim mail on reconnect
+      return;
+    }
+
+    a.pongPending = true;
+    send(a.conn, { type: "ping" });
+  };
+
+  agent.pingTimer = setInterval(tick, PING_INTERVAL_MS);
+}
