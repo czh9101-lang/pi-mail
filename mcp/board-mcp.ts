@@ -17,13 +17,13 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { BoardOpResponse } from "./types.js";
-import * as http from "./http.js";
+import type { BoardBackend, BoardOpResponse } from "./types.js";
+import { httpBackend } from "./http.js";
 import { findTask, renderBoard, renderOpResult, renderTask } from "./format.js";
 
 /** Common: find a task across the board, returning a "not found" string if missing. */
-async function loadTask(taskId: string) {
-  const b = await http.getBoard();
+async function loadTask(backend: BoardBackend, taskId: string) {
+  const b = await backend.getBoard();
   const t = findTask(b, taskId);
   return { b, t };
 }
@@ -39,12 +39,15 @@ function ok(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
-/** Build the MCP server with all board tools registered. */
-export function createBoardMcpServer(): McpServer {
+/** Build the MCP server with all board tools registered.
+ *  `backend` defaults to the HTTP-fetch backend (standalone stdio bridge);
+ *  the daemon passes an in-process backend when it hosts /mcp directly. */
+export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpServer {
   const server = new McpServer({
     name: "pi-mail-board",
     version: "1.0.0",
   });
+  const http = backend;
 
   // ── board_list_tasks ──────────────────────────────────────────────────────
   server.tool(
@@ -75,7 +78,7 @@ export function createBoardMcpServer(): McpServer {
     },
     async ({ taskId }) => {
       try {
-        const { b, t } = await loadTask(taskId);
+        const { b, t } = await loadTask(http, taskId);
         if (!t) return ok(`Task not found: ${taskId}. Run board_list_tasks first.`);
         return ok(renderTask(t, b));
       } catch (e) {
@@ -96,7 +99,7 @@ export function createBoardMcpServer(): McpServer {
     async ({ taskId, column, note }) => {
       try {
         const resp = await http.moveTask(taskId, column, note);
-        const { b, t } = await loadTask(taskId);
+        const { b, t } = await loadTask(http, taskId);
         const colName = t ? (b.columns.find((c) => c.id === t.columnId)?.name ?? column) : column;
         return ok(renderOpResult(resp, `Moved ${taskId} → ${colName}`));
       } catch (e) {

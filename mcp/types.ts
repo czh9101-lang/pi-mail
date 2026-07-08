@@ -85,3 +85,47 @@ export interface BoardOpResponse {
   taskId?: string;
   key?: string;
 }
+
+/** Shape of the create-task body (mirrors POST /api/board/create). */
+export interface CreateTaskBody {
+  summary: string;
+  description?: string;
+  column?: string;
+  parent?: string;
+  inJira?: boolean;
+  /** Issue hierarchy: "epic" | "story" | "task" | "subtask". */
+  level?: string;
+  /** Board id/prefix of the epic a story belongs to. */
+  epicId?: string;
+  /** Create in the Backlog pool (off-board, local-only) instead of a column. */
+  backlog?: boolean;
+}
+
+/** Shape of the update-task body (mirrors POST /api/board/update). */
+export interface UpdateTaskBody {
+  summary?: string;
+  description?: string;
+}
+
+/**
+ * The backend the MCP server talks to. The default implementation
+ * (`http.ts` → `httpBackend`) is a thin HTTP client over the daemon's
+ * `/api/board*` endpoints. When the MCP server is hosted *inside* the
+ * daemon (the daemon serves `/mcp` directly), the daemon supplies an
+ * in-process backend whose methods call the board functions without an
+ * HTTP round-trip. The method shapes mirror the daemon's HTTP response
+ * bodies so the tool formatters work unchanged either way.
+ */
+export interface BoardBackend {
+  getBoard(): Promise<BoardState>;
+  getBoardConfig(): Promise<unknown>;
+  setBoardConfig(config: Record<string, unknown>): Promise<unknown>;
+  syncBoard(): Promise<unknown>;
+  moveTask(taskId: string, column: string, note?: string): Promise<BoardOpResponse>;
+  commentTask(taskId: string, text: string): Promise<BoardOpResponse>;
+  progressTask(taskId: string, text: string): Promise<BoardOpResponse>;
+  assignTask(taskId: string, assignee: string, newSession?: boolean): Promise<BoardOpResponse>;
+  createTask(body: CreateTaskBody): Promise<BoardOpResponse>;
+  updateTask(taskId: string, body: UpdateTaskBody): Promise<BoardOpResponse>;
+  flagTask(taskId: string, reason?: string, clear?: boolean): Promise<BoardOpResponse>;
+}

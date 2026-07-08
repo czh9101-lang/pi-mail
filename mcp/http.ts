@@ -11,7 +11,7 @@
  * http://127.0.0.1:${PI_MAIL_UI_PORT || 1994}.
  */
 
-import type { BoardState, BoardOpResponse } from "./types.js";
+import type { BoardState, BoardOpResponse, BoardBackend, CreateTaskBody, UpdateTaskBody } from "./types.js";
 
 /** Resolve the daemon base URL from env (with sensible defaults). */
 export function daemonBaseUrl(): string {
@@ -74,26 +74,14 @@ export async function assignTask(taskId: string, assignee: string, newSession?: 
 }
 
 /** POST /api/board/create — create a task / subtask. */
-export async function createTask(body: {
-  summary: string;
-  description?: string;
-  column?: string;
-  parent?: string;
-  inJira?: boolean;
-  /** Issue hierarchy: "epic" | "story" | "task" | "subtask". */
-  level?: string;
-  /** Board id/prefix of the epic a story belongs to. */
-  epicId?: string;
-  /** Create in the Backlog pool (off-board, local-only) instead of a column. */
-  backlog?: boolean;
-}): Promise<BoardOpResponse> {
+export async function createTask(body: CreateTaskBody): Promise<BoardOpResponse> {
   return request<BoardOpResponse>("POST", "/api/board/create", body);
 }
 
 /** POST /api/board/update — edit a task's summary/description (pushes to Jira for jira tasks). */
 export async function updateTask(
   taskId: string,
-  body: { summary?: string; description?: string },
+  body: UpdateTaskBody,
 ): Promise<BoardOpResponse> {
   return request<BoardOpResponse>("POST", "/api/board/update", { taskId, ...body });
 }
@@ -102,6 +90,21 @@ export async function updateTask(
 export async function flagTask(taskId: string, reason?: string, clear?: boolean): Promise<BoardOpResponse> {
   return request<BoardOpResponse>("POST", "/api/board/flag", { taskId, reason, clear });
 }
+
+/** Default backend: a thin HTTP client over the daemon's `/api/board*` endpoints. */
+export const httpBackend: BoardBackend = {
+  getBoard,
+  getBoardConfig,
+  setBoardConfig,
+  syncBoard,
+  moveTask,
+  commentTask,
+  progressTask,
+  assignTask,
+  createTask,
+  updateTask,
+  flagTask,
+};
 
 // ── internals ─────────────────────────────────────────────────────────────────
 

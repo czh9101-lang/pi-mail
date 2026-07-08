@@ -235,18 +235,20 @@ disable it in Board → Settings (`nudgeEnabled`, `nudgeIntervalMin`).
 
 ## Board MCP server
 
-`mcp/` ships a standalone [Model Context Protocol](https://modelcontextprotocol.io)
-server that exposes the shared task board to external MCP clients (Claude
-Desktop, Cursor, any MCP host) over the **Streamable HTTP** transport
-(`POST`/`GET /mcp`). It is a thin shim over the daemon's existing HTTP
-board API — every tool maps one-to-one onto an `/api/board*` endpoint, so
-all board logic, Jira sync, and assignment notifications stay in the daemon.
-The tool names and parameter shapes mirror the in-pi `board_*` agent tools,
-so an MCP client drives the board the same way an agent does.
+The MCP server is hosted **inside the pi-mail daemon** itself — it serves
+`POST /mcp` on the daemon's existing HTTP UI port (default `1994`) over the
+**Streamable HTTP** transport, backed by an **in-process** board backend that
+calls the daemon's board functions directly. No separate process, no HTTP
+loopback: the daemon, the web UI, the WebSocket terminal, and the MCP server
+all live in one. A `--stdio` bridge (`mcp/build/index.js`) remains for MCP
+clients that prefer to spawn the server as a subprocess.
 
-Board operations run as the `human` agent (the daemon's HTTP API attributes
-to `HUMAN_AGENT_ID`, same as the web UI). A `--stdio` fallback is available
-for clients that prefer to spawn the server as a subprocess.
+It is a thin shim over the daemon's board logic — every tool maps one-to-one
+onto a board operation, so all Jira sync, column resolution, and assignment
+notifications stay in the daemon. The tool names and parameter shapes mirror
+the in-pi `board_*` agent tools, so an MCP client drives the board the same
+way an agent does. Board operations run as the `human` agent
+(`HUMAN_AGENT_ID`, same as the web UI).
 
 ### Tools
 
@@ -267,41 +269,48 @@ for clients that prefer to spawn the server as a subprocess.
 
 ### Build & run
 
+The HTTP MCP server needs no separate start — it comes up with the daemon.
+Just build the TypeScript so the daemon can import it:
+
 ```bash
 npm install
-npm run build:mcp                 # tsc → mcp/build/
-node ./mcp/build/index.js         # HTTP server on 127.0.0.1:8787/mcp
-node ./mcp/build/index.js --stdio # (fallback) stdio server
+npm run build:mcp                 # tsc → mcp/build/ (daemon imports mcp/build/board-mcp.js)
 ```
 
-The daemon address is read from env, defaulting to `http://127.0.0.1:1994`.
-The MCP server's own listen address defaults to `127.0.0.1:8787`:
+The daemon serves `POST /mcp` on its UI port (`PI_MAIL_UI_HOST`/
+`PI_MAIL_UI_PORT`, default `0.0.0.0:1994`). Stateful SSE streams and sessions
+are not supported (stateless server — `POST` only). The SDK + compiled
+`mcp/build/board-mcp.js` are imported lazily, so the daemon still runs if the
+MCP build or its npm deps are absent (`/mcp` answers `503` in that case).
+
+The stdio bridge (`mcp/build/index.js --stdio`) talks to the daemon over its
+HTTP `/api/board*` endpoints; its daemon address is read from env, defaulting
+to `http://127.0.0.1:1994`:
 
 | Env var | Default | Description |
 |---|---|---|
-| `PI_MAIL_BASE_URL` | — | Daemon URL; overrides the host/port below |
-| `PI_MAIL_UI_HOST` | `127.0.0.1` | Daemon host (ignored if `PI_MAIL_BASE_URL` is set) |
-| `PI_MAIL_UI_PORT` | `1994` | Daemon port (ignored if `PI_MAIL_BASE_URL` is set) |
-| `PI_MAIL_MCP_HOST` | `127.0.0.1` | Bind address for the MCP HTTP server |
-| `PI_MAIL_MCP_PORT` | `8787` | Port for the MCP HTTP server |
+| `PI_MAIL_BASE_URL` | — | Daemon URL (stdio bridge); overrides the host/port below |
+| `PI_MAIL_UI_HOST` | `127.0.0.1` | Daemon host (stdio bridge; ignored if `PI_MAIL_BASE_URL` is set) |
+| `PI_MAIL_UI_PORT` | `1994` | Daemon port (stdio bridge; ignored if `PI_MAIL_BASE_URL` is set) |
 
-A `GET /healthz` (and `GET /`) returns `{ ok: true }` for health probes.
+(`PI_MAIL_MCP_HOST`/`PI_MAIL_MCP_PORT` are no longer used — the HTTP server
+now lives in the daemon.)
 
 ### Claude Desktop / remote MCP config
 
-Point the client at the running HTTP endpoint (no subprocess spawn needed):
+Point the client at the daemon's HTTP endpoint (no subprocess spawn needed):
 
 ```jsonc
 {
   "mcpServers": {
     "pi-mail-board": {
-      "url": "http://127.0.0.1:8787/mcp"
+      "url": "http://127.0.0.1:1994/mcp"
     }
   }
 }
 ```
 
-For a local subprocess that prefers stdio, use the `--stdio` arg instead:
+For a local subprocess that prefers stdio, use the `--stdio` bridge instead:
 
 ```jsonc
 {
@@ -383,6 +392,7 @@ needed.
 | `mail_list_agents` | List agents with status, context %, and uptime |
 | `mail_set_name <name>` | Set your display name |
 | `mail_set_status <status>` | Set your status line (empty string clears it) |
+| `mail_restart_daemon` | Restart the shared mail daemon (briefly disconnects every agent; auto-reconnects) |
 | `mail_spawn_agent { cwd, name?, model?, kickoff? }` | Spawn a fresh pi agent in a directory (tmux); returns its name |
 | `mail_stop_agent { name }` | Stop a daemon-spawned agent (kills its tmux session) |
 | `board_list_tasks` | Task board overview grouped by column (`mine: true` filters to you) |

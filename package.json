@@ -10,7 +10,6 @@
   },
   "scripts": {
     "build:mcp": "tsc -p mcp/tsconfig.json",
-    "start:mcp": "node ./mcp/build/index.js",
     "start:mcp:stdio": "node ./mcp/build/index.js --stdio",
     "test": "node --test"
   },
