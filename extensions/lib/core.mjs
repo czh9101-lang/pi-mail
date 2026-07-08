@@ -86,6 +86,17 @@ function loadHistory() {
   }
 }
 
+/** Flush any pending history write immediately (used on shutdown). */
+function flushHistory() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(messageLog));
+  } catch {}
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 export function send(socket, msg) {
@@ -225,4 +236,4 @@ export function archiveHumanMessage(id) {
   return found;
 }
 
-export { schedulePersist, loadHistory };
+export { schedulePersist, loadHistory, flushHistory };
