@@ -124,9 +124,7 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `GET /api/spawn` | — | Spawned sessions: name, cwd, model, alive |
 | `POST /api/spawn` | `{ cwd, name?, model?, kickoff? }` | Spawn a fresh agent (tmux); returns `{ name }` |
 | `POST /api/spawn/stop` | `{ name }` | Stop a daemon-spawned agent |
-| `GET /api/spawn/roots` | — | Allowed picker roots |
-| `POST /api/spawn/roots` | `{ roots }` | Set the operator-configured roots allowlist |
-| `GET /api/spawn/ls?path=` | — | List subdirectories under an allowed root |
+| `GET /api/spawn/ls?path=` | — | List subdirectories of any directory |
 | `GET /api/spawn/terminal?name=` | (WebSocket upgrade) | Live PTY stream of the spawned tmux session (raw bytes both ways) |
 
 ## Task board
@@ -301,11 +299,10 @@ terminal. Each spawned agent runs in its own detached **tmux** session, which
 gives it a PTY (interactive `pi` works unmodified), is attachable
 (`tmux attach -t <name>`), and survives daemon restarts.
 
-- **From the board UI:** the **➕ Spawn agent** button opens a directory picker
-  (a server-side browser over an allowlist — pragmatic, not a security
-  boundary; default root `$HOME`, extra roots via the picker settings or the
-  `PI_MAIL_SPAWN_ROOTS` env var, colon-separated). Optionally set a name,
-  model, and a kickoff prompt; the new agent appears in the Agents table
+- **From the board UI:** the **➕ Spawn agent** button opens a directory
+  picker that can browse the whole filesystem (starts at `/`, with
+  up-to-parent navigation; you can also type any absolute path). Optionally set
+  a name, model, and a kickoff prompt; the new agent appears in the Agents table
   within a few seconds and is assignable from board cards like any other
   agent.
 - **From an orchestrator:** `mail_spawn_agent({ cwd, name?, model?, kickoff? })`

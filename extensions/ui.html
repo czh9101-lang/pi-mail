@@ -224,7 +224,6 @@
   .spawn-modal .picker select { flex: 1 1 200px; }
   .spawn-modal .crumbs { font-size: 11px; color: var(--dim); word-break: break-all; margin-top: 4px; }
   .spawn-modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  .spawn-modal .roots-row { font-size: 11px; color: var(--dim); margin-top: 6px; }
   #xterm-host { flex: 1; min-height: 0; background: #000; border-radius: 6px; padding: 4px; }
   .term-overlay .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .spawn-btn { font-weight: 600; }
@@ -867,26 +866,17 @@ async function ensureBoardCfg() {
 // ── Spawn agent modal + web terminal ────────────────────────────────────────
 
 /** State for the directory picker: current path + cached ls results. */
-const spawnUi = { path: "", dirs: [], roots: [], manualMode: false, loadingLs: false };
+const spawnUi = { path: "", dirs: [], manualMode: false, loadingLs: false };
 
 /** Open the spawn modal with the directory picker. */
 async function openSpawnModal() {
-  // Seed roots + current path from the daemon.
-  let roots = [];
-  try {
-    const r = await fetch("/api/spawn/roots").then(r => r.json());
-    roots = r.roots || [];
-  } catch {}
-  if (!roots.length) roots = ["/"];
-  spawnUi.roots = roots;
-  if (!spawnUi.path || !roots.some(r => spawnUi.path === r || spawnUi.path.startsWith(r + "/"))) {
-    spawnUi.path = roots[0];
-  }
+  // Default to the filesystem root; the picker can browse anywhere.
+  if (!spawnUi.path) spawnUi.path = "/";
   await spawnLs(spawnUi.path);
   renderSpawnModal();
 }
 
-/** Fetch a directory listing under path (must be under an allowed root). */
+/** Fetch a directory listing for `path` (any directory on the filesystem). */
 async function spawnLs(path) {
   spawnUi.loadingLs = true;
   if (document.getElementById("spawnModal")) renderSpawnModal();
@@ -909,12 +899,18 @@ function renderSpawnModal() {
   // Directory picker
   card.appendChild(el("label", null, "Working directory (cwd)"));
   const picker = el("div", "picker");
-  // Root selector
-  const rootSel = el("select");
-  for (const r of spawnUi.roots) { const o = el("option", null, r); o.value = r; if (spawnUi.path.startsWith(r)) o.selected = true; rootSel.appendChild(o); }
-  rootSel.addEventListener("change", () => spawnLs(rootSel.value));
-  picker.appendChild(rootSel);
-  // Subdirectory select (navigate). Double-click to enter? We use a 'go' button + change-to-navigate.
+  // Up-to-parent navigation: go to the parent directory (disabled at /).
+  const upBtn = el("button", "btn secondary mini", "↑");
+  upBtn.title = "Go to parent directory";
+  upBtn.disabled = spawnUi.path === "/";
+  upBtn.addEventListener("click", () => {
+    if (spawnUi.path !== "/") {
+      const parent = spawnUi.path.replace(/\/[^/]+\/?$/, "") || "/";
+      spawnLs(parent);
+    }
+  });
+  picker.appendChild(upBtn);
+  // Subdirectory select (navigate into).
   const dirSel = el("select"); dirSel.size = 8; dirSel.style.flex = "2 1 240px";
   if (spawnUi.loadingLs) { const o = el("option", null, "loading…"); dirSel.appendChild(o); }
   else if (!spawnUi.dirs.length) { const o = el("option", null, "(no subdirectories)"); dirSel.appendChild(o); }
@@ -932,10 +928,6 @@ function renderSpawnModal() {
   manualIn.addEventListener("change", () => { if (manualIn.value.trim()) { spawnUi.manualMode = true; spawnLs(manualIn.value.trim()); } });
   manualWrap.appendChild(manualIn);
   card.appendChild(manualWrap);
-  // "Select this directory" affordance: clicking selects the current path as cwd.
-  const rootsRow = el("div", "roots-row");
-  rootsRow.textContent = "Allowed roots: " + spawnUi.roots.join(", ");
-  card.appendChild(rootsRow);
 
   // Name / model / kickoff
   const nameL = el("label", null, "Agent name (optional — defaults to <dir>-<id6>)");
