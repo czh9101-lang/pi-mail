@@ -220,6 +220,42 @@ where it left off. This is the exception, not the default.
 
 When in doubt, use `true`. Stale context is the #1 source of worker confusion.
 
+### 5d. Spawning a fresh worker when no agent is running yet
+
+`mail_spawn_agent` brings up a brand-new, long-running pi agent in a working
+directory you choose — a fresh worker for a project that has no live agent yet.
+The daemon spawns it in a detached tmux session (PTY, attachable, survives
+daemon restarts); it registers with the federation within a few seconds.
+
+```typescript
+mail_spawn_agent({
+  cwd: "/path/to/project",        // required, must be under an allowed root
+  name: "project-worker-1",       // optional; defaults to <dir>-<id6>
+  model: "anthropic/claude-sonnet-4", // optional
+  kickoff: "## Task: ..."          // optional; delivered as a new-session task
+})
+```
+
+Use this to scale out to a new project directory instead of messaging an
+already-running agent. The typical flow:
+
+1. `mail_spawn_agent({ cwd })` → get the new agent's name.
+2. Wait for it to register (it shows in `mail_list_agents` within ~seconds).
+3. Give it work: `board_assign_task({ taskId, assignee: name, newSession: true })`
+   or `mail_send({ to: name, newSession: true, ... })`. (If you passed a
+   `kickoff`, that already delivered its first task — skip this.)
+4. Optionally `mail_send({ to: name })` with `mail_set_status` checks as usual.
+
+Teardown: `mail_stop_agent({ name })` kills the tmux session — but **only** for
+agents you spawned with `mail_spawn_agent**. It will refuse an operator-launched
+agent. Use it when a worker's job is done so you're not leaving idle processes
+around.
+
+> The human can also spawn from the board UI (➕ Spawn agent, with a directory
+> picker) and open a live terminal (xterm.js) into the spawned tmux session.
+> Spawned agents appear in the Agents table and are assignable from board cards
+> exactly like any other agent.
+
 ---
 
 ## 6. Worker Babysitting — The Core of This Skill
@@ -421,6 +457,13 @@ mail_send({ to: "worker", subject: "Task: X", body: "...", newSession: true })
 
 // Dispatch (follow-up)
 mail_send({ to: "worker", subject: "Re: Task: X — clarification", body: "..." })
+
+// Spawn a fresh worker when none is running in that project yet
+mail_spawn_agent({ cwd: "/path/to/project", kickoff: "## Task: ..." })
+// → name; then mail_list_agents() to confirm registration, then assign work
+
+// Teardown a worker you spawned
+mail_stop_agent({ name: "project-worker-1" })
 
 // Broadcast
 mail_broadcast({ subject: "__probe_reply__", body: "alive" })

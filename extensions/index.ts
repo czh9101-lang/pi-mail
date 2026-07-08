@@ -634,9 +634,9 @@ export default function (pi: ExtensionAPI) {
       `4. Keep it short (<60 chars) and factual — branch name, issue key, and action are ideal.\n` +
       `Do NOT skip status updates — the orchestrator relies on them to coordinate work.\n` +
       `\nThe federation also has a shared kanban task board (optionally synced two-way with a Jira sprint). ` +
-      `Tools: board_list_tasks, board_get_task, board_move_task, board_comment_task, board_assign_task, board_create_task, board_split_task, board_update_task, board_flag_task. ` +
-      `If a task is assigned to you (you'll get it as mail), work it via these tools: move it as you progress, comment on findings, and follow any column instructions. ` +
-      `If a task is unclear, flag it with board_flag_task (with your questions) instead of guessing; if it's too big, subdivide it with board_split_task.`;
+      `Tools: board_list_tasks, board_get_task, board_move_task, board_comment_task, board_progress_task, board_assign_task, board_create_task, board_split_task, board_update_task, board_flag_task. ` +
+      `If a task is assigned to you (you'll get it as mail), work it via these tools: move it as you progress, post progress updates (board_progress_task) before moving it onward, comment on findings, and follow any column instructions. ` +
+      `If a task is unclear, flag it with board_flag_task (with your questions) instead of guessing; if it's too big, subdivide it with board_split_task. A daemon nudge will mail you if an in-progress task of yours goes quiet for a while — reply with board_progress_task.`;
 
     // Tell the agent which channel the current task arrived on, so it knows
     // whether to reply via mail (operator/agent not at the TUI) or respond in
@@ -1438,7 +1438,16 @@ export default function (pi: ExtensionAPI) {
     parentKey: string | null;
     flagged: { by: string; reason: string; ts: number } | null;
     updatedAt: number;
-    activity: Array<{ ts: number; who: string; text: string }>;
+    progressSince?: number;
+    lastProgressTs?: number;
+    lastNudgeTs?: number;
+    /** Where the task sits: a board column, the shared backlog, or the archive. */
+    location?: "board" | "backlog" | "archive";
+    /** Issue hierarchy level (local-only; Jira issueType is separate). */
+    level?: "epic" | "story" | "task" | "subtask";
+    /** Board id of the epic a story belongs to (optional). */
+    epicId?: string | null;
+    activity: Array<{ ts: number; who: string; text: string; kind?: string }>;
   }
 
   interface BoardStateResp {
@@ -1469,7 +1478,9 @@ export default function (pi: ExtensionAPI) {
     const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : "";
     const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : "";
     const flag = t.flagged ? ` ⚠unclear` : "";
-    return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${flag}`;
+    const lvl = t.level && t.level !== "task" ? ` ${t.level}` : "";
+    const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : "";
+    return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${flag}`;
   }
 
   /** Result formatting shared by board mutation tools. */
@@ -1488,28 +1499,59 @@ export default function (pi: ExtensionAPI) {
     name: "board_list_tasks",
     label: "Board: Tasks",
     description:
-      "List all tasks on the shared kanban task board, grouped by column. " +
-      "Shows task id, Jira key, summary, assignee and Jira status. Use 'mine: true' to only see tasks assigned to you.",
+      "List all tasks on the shared kanban task board, grouped by column, plus the Backlog and Archive pools. " +
+      "Shows task id, Jira key, summary, assignee and Jira status. Use 'mine: true' to only see tasks assigned to you. " +
+      "By default archived tasks are hidden; pass includeArchived: true to see them. Pass location to filter to 'board'|'backlog'|'archive'.",
     promptSnippet: "List tasks on the shared task board",
     promptGuidelines: [
       "Use board_list_tasks to see sprint/board work, e.g. when asked what to work on or to check task state.",
     ],
     parameters: Type.Object({
       mine: Type.Optional(Type.Boolean({ description: "Only show tasks assigned to you" })),
+      location: Type.Optional(Type.String({
+        description: "Filter by location: 'board' (on a column), 'backlog', or 'archive'. Omit to see board + backlog (archive hidden unless includeArchived).",
+      })),
+      level: Type.Optional(Type.String({ description: "Filter to a level: 'epic' | 'story' | 'task' | 'subtask'" })),
+      includeArchived: Type.Optional(Type.Boolean({ description: "Include archived tasks (location='archive') in the listing" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       try {
         const b = await fetchBoard();
         let tasks = b.tasks ?? [];
         if (params.mine) tasks = tasks.filter((t) => t.assignee === agentName);
+        if (params.level) tasks = tasks.filter((t) => (t.level ?? "task") === params.level);
+        const wantLoc = params.location;
+        const showArchive = !!params.includeArchived || wantLoc === "archive";
+        // Default view: board + backlog, archive hidden (it's a filter, per operator).
+        tasks = tasks.filter((t) => {
+          const loc = t.location ?? "board";
+          if (wantLoc) return loc === wantLoc;
+          return loc !== "archive" || showArchive;
+        });
+        const cols = b.columns ?? [];
         const lines: string[] = [];
-        for (const col of b.columns ?? []) {
-          const inCol = tasks.filter((t) => t.columnId === col.id);
+        // Backlog pool (sits above the board) — show first when in default/board view.
+        if (!wantLoc || wantLoc === "backlog") {
+          const inBacklog = tasks.filter((t) => (t.location ?? "board") === "backlog");
+          if (params.mine ? inBacklog.length : true) {
+            lines.push(`▌ Backlog — ${inBacklog.length} item${inBacklog.length === 1 ? "" : "s"}`);
+            if (!inBacklog.length) lines.push("  (empty)");
+            for (const t of inBacklog) lines.push(taskLine(t));
+          }
+        }
+        for (const col of cols) {
+          const inCol = tasks.filter((t) => (t.location ?? "board") === "board" && t.columnId === col.id);
           if (params.mine && inCol.length === 0) continue;
           const jira = col.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)";
           lines.push(`▌ ${col.name}${jira} — ${inCol.length} task${inCol.length === 1 ? "" : "s"}`);
           if (col.instructions) lines.push(`  ↳ instructions: ${col.instructions.split("\n")[0].slice(0, 100)}…`);
           for (const t of inCol) lines.push(taskLine(t));
+        }
+        if (showArchive && (!wantLoc || wantLoc === "archive")) {
+          const inArch = tasks.filter((t) => t.location === "archive");
+          lines.push(`▌ Archive (done board) — ${inArch.length} item${inArch.length === 1 ? "" : "s"}`);
+          if (!inArch.length) lines.push("  (empty)");
+          for (const t of inArch) lines.push(taskLine(t));
         }
         const sync = b.jiraConfigured
           ? b.syncError
@@ -1543,10 +1585,14 @@ export default function (pi: ExtensionAPI) {
         );
         if (!t) return { content: [{ type: "text", text: `Task not found: ${params.taskId}. Run board_list_tasks first.` }] };
         const col = (b.columns ?? []).find((c) => c.id === t.columnId);
+        const loc = t.location ?? "board";
+        const locLabel = loc === "backlog" ? "Backlog" : loc === "archive" ? "Archive" : (col?.name ?? t.columnId ?? "?");
+        const epic = t.epicId ? (b.tasks ?? []).find((e) => e.id === t.epicId) : null;
         const lines = [
           `Task:     ${t.key ? `[${t.key}] ` : ""}${t.summary}`,
           `Id:       ${t.id}`,
-          `Column:   ${col?.name ?? t.columnId}${col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)"}`,
+          `Location: ${locLabel}${loc === "board" ? (col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)") : " (off-board)"}`,
+          `Level:    ${t.level ?? "task"}${epic ? ` · epic: ${epic.key ?? epic.id.slice(0, 8)} — ${epic.summary}` : ""}`,
           `Assignee: ${t.assignee ?? "—"}`,
           `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
           ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
@@ -1564,7 +1610,8 @@ export default function (pi: ExtensionAPI) {
         if (t.activity?.length) {
           lines.push("", "## Activity");
           for (const a of t.activity.slice(-15)) {
-            lines.push(`- ${new Date(a.ts).toLocaleString()} — ${a.who}: ${a.text}`);
+            const mark = a.kind === "progress" ? " 📈" : "";
+            lines.push(`- ${new Date(a.ts).toLocaleString()} — ${a.who}:${mark} ${a.text}`);
           }
         }
         return { content: [{ type: "text", text: lines.join("\n") }], details: { task: t } };
@@ -1579,14 +1626,17 @@ export default function (pi: ExtensionAPI) {
     label: "Board: Move",
     description:
       "Move a board task to another column. Moving into a Jira-mapped column also transitions the Jira issue. " +
-      "Moving a task assigned to someone else notifies them by mail (including the column's instructions).",
+      "Moving a task assigned to someone else notifies them by mail (including the column's instructions). " +
+      "The column may also be 'backlog' (park off-board in the shared backlog) or 'archive' (the done board — removes the task from its column incl. Done; restorable). Backlog/archive are local-only (never pushed to Jira).",
     promptSnippet: "Move a task on the shared board",
     promptGuidelines: [
       "Move your assigned board task as you progress: to the in-progress column when starting, and onward when done.",
+      "Move to 'archive' when a task is finished and you want it off the active board (the done board); it's restorable.",
+      "Move to 'backlog' to park a task off-board without archiving it.",
     ],
     parameters: Type.Object({
       taskId: Type.String({ description: "Task id prefix or Jira key" }),
-      column: Type.String({ description: "Target column name or id (see board_list_tasks)" }),
+      column: Type.String({ description: "Target column name/id, or 'backlog'/'archive'" }),
       note: Type.Optional(Type.String({ description: "Short note recorded in the task's activity log" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
@@ -1628,11 +1678,41 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "board_progress_task",
+    label: "Board: Progress",
+    description:
+      "Post a progress update on a board task you're working on. Progress is internal (not posted to Jira); it shows in the task detail view and is folded into the description when the task moves columns, so the next agent inherits a snapshot. Use this to report what's done / what's blocking, especially before moving the task onward.",
+    promptSnippet: "Post progress on a board task",
+    promptGuidelines: [
+      "Post a board_progress_task update before moving a task to the next column, so the next agent (and the operator) see what was done.",
+      "Use board_progress_task for work-in-progress notes (kept internal); use board_comment_task for decisions/answers that belong on the Jira issue too.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task id prefix or Jira key" }),
+      text: Type.String({ description: "What you've done since the last update, and anything blocking you" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; message?: string; task?: BoardTask }>(
+          { type: "board_progress", taskId: params.taskId, text: params.text },
+          30_000
+        );
+        return boardOpResult(resp, `Progress posted on ${resp.task?.key ?? params.taskId}`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
     name: "board_assign_task",
     label: "Board: Assign",
     description:
       "Assign a board task to an agent (by name, from mail_list_agents). The assignee is mailed the full task package " +
-      "including the column's instructions. Pass an empty assignee to unassign.",
+      "including the column's instructions. Pass an empty assignee to unassign. Reassigning a task to a different agent " +
+      "automatically clears that agent's context (delivered as a fresh-session task); first assignment only clears context " +
+      "when newSession is true.",
     promptSnippet: "Assign a board task to an agent",
     promptGuidelines: [
       "When orchestrating, assign board tasks instead of ad-hoc mail so progress is visible on the board.",
@@ -1641,7 +1721,7 @@ export default function (pi: ExtensionAPI) {
       taskId: Type.String({ description: "Task id prefix or Jira key" }),
       assignee: Type.String({ description: "Agent name to assign (empty string to unassign)" }),
       newSession: Type.Optional(Type.Boolean({
-        description: "If true, the assignee starts a fresh session (cleared context) for this task. Recommended for new, unrelated tasks.",
+        description: "If true, the assignee starts a fresh session (cleared context) for this task. On reassignment to a different agent this happens automatically regardless.",
       })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
@@ -1664,14 +1744,20 @@ export default function (pi: ExtensionAPI) {
     label: "Board: Create",
     description:
       "Create a new task on the shared board. With 'parent' it becomes a subtask; when the parent is a Jira issue " +
-      "(or inJira is true) a real Jira issue is created and kept in sync. Otherwise the task is board-only.",
+      "(or inJira is true) a real Jira issue is created and kept in sync. Otherwise the task is board-only. " +
+      "Pass backlog:true to create straight into the Backlog pool (off-board, local-only). " +
+      "Use level to set the issue hierarchy: 'epic' | 'story' | 'task' | 'subtask' (default 'task', or 'subtask' when parent is given). " +
+      "A story may reference an epic by id via epicId.",
     promptSnippet: "Create a task on the shared board",
     parameters: Type.Object({
       summary: Type.String({ description: "One-line task summary" }),
       description: Type.Optional(Type.String({ description: "Full task description" })),
-      column: Type.Optional(Type.String({ description: "Column name or id (defaults to the parent's column, else the first column)" })),
+      column: Type.Optional(Type.String({ description: "Column name or id (defaults to the parent's column, else the first column). Ignored when backlog:true." })),
       parent: Type.Optional(Type.String({ description: "Parent task id prefix or Jira key — makes this a subtask" })),
       inJira: Type.Optional(Type.Boolean({ description: "Create a Jira issue for a top-level task (needs a project key in board settings)" })),
+      level: Type.Optional(Type.String({ description: "Issue level: 'epic' | 'story' | 'task' | 'subtask' (default inferred from parent)" })),
+      epicId: Type.Optional(Type.String({ description: "For a story: the board id (or prefix) of its epic" })),
+      backlog: Type.Optional(Type.Boolean({ description: "Create in the Backlog pool (off-board, local-only) instead of a column" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!connected || !client) return notConnected;
@@ -1684,11 +1770,15 @@ export default function (pi: ExtensionAPI) {
             column: params.column,
             parent: params.parent,
             inJira: params.inJira,
+            level: params.level,
+            epicId: params.epicId,
+            backlog: params.backlog,
           },
           30_000
         );
         const jiraNote = resp.task?.key ? ` (Jira: ${resp.task.key})` : "";
-        return boardOpResult(resp, `Created task [${resp.task?.id.slice(0, 8)}]${jiraNote} "${params.summary}"`);
+        const locNote = resp.task?.location === "backlog" ? " in Backlog" : "";
+        return boardOpResult(resp, `Created task [${resp.task?.id.slice(0, 8)}]${jiraNote}${locNote} "${params.summary}"`);
       } catch (err: unknown) {
         return errText(err);
       }
@@ -1794,6 +1884,77 @@ export default function (pi: ExtensionAPI) {
           30_000
         );
         return boardOpResult(resp, `Updated ${resp.task?.key ?? params.taskId}`);
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  // ── Agent spawning (orchestrator surface) ──────────────────────────────────
+  //
+  // These let an orchestrator bring up a brand-new, long-running pi agent in
+  // a chosen working directory (a fresh worker for a project), then drive it
+  // with board_assign_task / mail_send newSession:true. The daemon spawns the
+  // agent in a detached tmux session (PTY, attachable, survives daemon
+  // restarts). Only daemon-spawned sessions can be stopped.
+
+  pi.registerTool({
+    name: "mail_spawn_agent",
+    label: "Mail: Spawn Agent",
+    description:
+      "Spawn a fresh, long-running pi agent in a chosen working directory (a new worker for that project). The agent runs in a detached tmux session and registers with the federation within a few seconds; you can then assign it board tasks or mail it (newSession:true) to give it work. Returns the new agent's name. The cwd must be under an allowed root ($HOME by default, plus any configured roots). Use this to scale out orchestration to a new project directory instead of messaging an already-running agent.",
+    promptSnippet: "Spawn a fresh pi agent in a directory",
+    promptGuidelines: [
+      "Use mail_spawn_agent to bring up a new worker in a project dir, then board_assign_task / mail_send(newSession:true) to give it work.",
+      "The agent name defaults to <dir-basename>-<id6>; pass a name only if you need a specific one (tmux session name, no '.' or ':').",
+    ],
+    parameters: Type.Object({
+      cwd: Type.String({ description: "Absolute working directory for the new agent (must be under an allowed root)" }),
+      name: Type.Optional(Type.String({ description: "Optional agent/session name (defaults to <dir-basename>-<id6>)" })),
+      model: Type.Optional(Type.String({ description: "Optional model, e.g. 'anthropic/claude-sonnet-4' (defaults to pi's default)" })),
+      kickoff: Type.Optional(Type.String({ description: "Optional kickoff prompt; delivered to the new agent as a new-session task once it registers" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; name?: string; message?: string }>(
+          { type: "spawn", cwd: params.cwd, name: params.name, model: params.model, kickoff: params.kickoff },
+          45_000
+        );
+        if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
+        const name = resp.name ?? "";
+        const kick = params.kickoff ? ` (kickoff delivered as new-session task)` : "";
+        return {
+          content: [{ type: "text" as const, text: `✅ Spawned agent '${name}' in ${params.cwd}${kick}. It will appear in mail_list_agents shortly; assign it work with board_assign_task or mail_send(newSession:true).` }],
+          details: { name, cwd: params.cwd },
+        };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "mail_stop_agent",
+    label: "Mail: Stop Agent",
+    description:
+      "Stop a daemon-spawned agent (kills its tmux session). Only stops agents the daemon itself spawned via mail_spawn_agent — never an operator-launched agent. Use to tear down a worker when its work is done.",
+    promptSnippet: "Stop a spawned agent",
+    promptGuidelines: [
+      "Use mail_stop_agent only for agents you spawned with mail_spawn_agent; it will refuse operator-launched agents.",
+    ],
+    parameters: Type.Object({
+      name: Type.String({ description: "Name of the daemon-spawned agent to stop" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!connected || !client) return notConnected;
+      try {
+        const resp = await client.request<{ type: string; message?: string }>(
+          { type: "spawn_stop", name: params.name },
+          15_000
+        );
+        if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
+        return { content: [{ type: "text" as const, text: `✅ Stopped agent '${params.name}'` }] };
       } catch (err: unknown) {
         return errText(err);
       }

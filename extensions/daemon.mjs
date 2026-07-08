@@ -32,6 +32,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -265,6 +266,28 @@ const BOARD_FILE = path.join(AGENT_DIR, "mail-board.json");
 const JIRA_SYNC_INTERVAL_MS = 60_000;
 const DEFAULT_JQL = "assignee = currentUser() AND sprint in openSprints() ORDER BY rank";
 
+// ── Agent spawning (tmux) ─────────────────────────────────────────────────────
+//
+// The daemon can bring up a brand-new, long-running pi agent process in a
+// chosen working directory, so the operator (via the board UI) and
+// orchestrators (via the mail_spawn_agent tool) can spin up fresh workers
+// without opening a terminal. Each spawned agent runs in its own detached
+// tmux session, which gives it a PTY (interactive pi works unmodified), is
+// attachable (`tmux attach -t <name>`), and survives daemon restarts — the
+// daemon only tracks the session name; the tmux server owns the process.
+//
+// The set of daemon-spawned sessions is persisted so a /restart-mail-daemon
+// keeps tracking them (and stop() only ever kills sessions the daemon itself
+// spawned, never an operator-launched one).
+
+const SPAWN_FILE = path.join(AGENT_DIR, "mail-spawn.json");
+const PI_BIN = process.env.PI_MAIL_PI_BIN || "pi";
+const TMUX_BIN = process.env.PI_MAIL_TMUX_BIN || "tmux";
+// How long to wait for a freshly-spawned agent to register with the daemon
+// before returning (the agent keeps running regardless; this only gates the
+// synchronous "is it up yet?" answer + the kickoff delivery).
+const SPAWN_REGISTER_TIMEOUT_MS = parseInt(process.env.PI_MAIL_SPAWN_TIMEOUT || "20000", 10);
+
 const DEFAULT_COLUMNS = [
   {
     id: "refine",
@@ -296,13 +319,31 @@ const DEFAULT_COLUMNS = [
  *             parentId: string | null, parentKey: string | null,
  *             pinned?: boolean, flagged: { by: string, reason: string, ts: number } | null,
  *             knownCommentIds?: string[],
- *             activity: Array<{ ts: number, who: string, text: string }> }} BoardTask
+ *             progressSince?: number, lastProgressTs?: number, lastNudgeTs?: number,
+ *             location: "board" | "backlog" | "archive",
+ *             level: "epic" | "story" | "task" | "subtask",
+ *             epicId?: string | null,
+ *             activity: Array<{ ts: number, who: string, text: string, kind?: string }> }} BoardTask
  *
  * parentId/parentKey — subtask linkage (board id and Jira key of the parent).
  * pinned — created in Jira from the board; kept synced even when it doesn't
  *          match the sprint JQL (fetched individually).
  * flagged — the "task is unclear" marker; set/cleared via board_flag.
  * knownCommentIds — Jira comment ids already mirrored into activity (dedup).
+ * progressSince — ts lower bound for progress entries folded into the
+ *                 description on the last move; advanced to now on each fold.
+ * lastProgressTs — ts of the most recent kind:"progress" activity entry.
+ * lastNudgeTs — ts of the most recent progress-nudge mail, for dedup.
+ * location — where the task sits: "board" (a kanban column, columnId set),
+ *            "backlog" (the shared backlog pool above the board, columnId null),
+ *            or "archive" (the "done board", columnId null). Backlog + archive
+ *            are LOCAL-ONLY — never pushed to Jira; Jira sync won't override a
+ *            local backlog/archive placement.
+ * level — issue hierarchy: epic > story > (task|subtask). Stories may carry an
+ *         epicId pointing at their epic. Subtasks have a parentId (split).
+ *         Local-only metadata (Jira issueType is synced separately as-is).
+ * epicId — board id of the epic a story belongs to (optional; epics/stories
+ *          are a local hierarchy layer, not a Jira epic-link).
  */
 let board = {
   config: {
@@ -314,6 +355,10 @@ let board = {
     projectKey: process.env.JIRA_PROJECT_KEY || "",
     issueType: "Task",
     subtaskIssueType: "Sub-task",
+    // Progress-nudge: mail in-progress assignees who haven't posted progress
+    // in a while. Disableable + tunable from the board config endpoint.
+    nudgeEnabled: true,
+    nudgeIntervalMin: 30,
   },
   /** @type {BoardColumn[]} */
   columns: DEFAULT_COLUMNS,
@@ -345,12 +390,20 @@ function loadBoard() {
     const saved = JSON.parse(fs.readFileSync(BOARD_FILE, "utf8"));
     if (saved && typeof saved === "object") {
       // Saved config wins per-field; env vars remain fallback defaults.
-      for (const k of ["baseUrl", "email", "apiToken", "jql", "projectKey", "issueType", "subtaskIssueType"]) {
+      for (const k of ["baseUrl", "email", "apiToken", "jql", "projectKey", "issueType", "subtaskIssueType", "nudgeEnabled", "nudgeIntervalMin"]) {
         if (saved.config?.[k]) board.config[k] = saved.config[k];
       }
       if (Array.isArray(saved.columns) && saved.columns.length > 0) board.columns = saved.columns;
       if (Array.isArray(saved.tasks)) board.tasks = saved.tasks;
       if (typeof saved.lastSync === "number") board.lastSync = saved.lastSync;
+      // Backfill location/level for tasks saved before the backlog/archive +
+      // epic/story hierarchy existed. Defaults: on-board, level inferred from
+      // parentage (subtask if it has a parent, else task). Lossless.
+      for (const t of board.tasks) {
+        if (!t.location) t.location = "board";
+        if (!t.level) t.level = t.parentId || t.parentKey ? "subtask" : "task";
+        if (t.epicId === undefined) t.epicId = null;
+      }
     }
   } catch {
     // No board file yet — defaults apply.
@@ -382,10 +435,30 @@ function findBoardColumn(spec) {
   );
 }
 
-function taskActivity(task, who, text) {
-  task.activity.push({ ts: Date.now(), who, text });
+/** Map a Jira issue type name onto our local issue level. Best-effort; unknown
+ *  types default to "task". Purely a display/local hint — the real Jira issue
+ *  type is kept on task.issueType untouched. */
+function levelFromIssueType(name) {
+  const n = String(name ?? "").toLowerCase();
+  if (/^epic$/.test(n)) return "epic";
+  if (/story/.test(n) || /^(user story)$/.test(n)) return "story";
+  if (/sub[- ]?task/.test(n)) return "subtask";
+  return "task";
+}
+
+function taskActivity(task, who, text, kind) {
+  task.activity.push({ ts: Date.now(), who, text, ...(kind ? { kind } : {}) });
   if (task.activity.length > 50) task.activity.splice(0, task.activity.length - 50);
   task.updatedAt = Date.now();
+  if (kind === "progress") task.lastProgressTs = task.updatedAt;
+}
+
+/** Activity entries with kind "progress" that have been recorded since the
+ *  last fold (>= progressSince). Used by boardMove to fold a summary of recent
+ *  progress into the task description when it moves columns. */
+function progressEntriesSince(task) {
+  const since = task.progressSince ?? 0;
+  return (task.activity ?? []).filter((a) => (a.kind ?? "comment") === "progress" && a.ts >= since);
 }
 
 function boardState() {
@@ -398,12 +471,23 @@ function boardState() {
   };
 }
 
+/** Human-readable label for where a task sits: a column name, or
+ *  "Backlog"/"Archive" for off-board tasks. */
+function taskLocationLabel(task) {
+  if (task.location === "backlog") return "Backlog";
+  if (task.location === "archive") return "Archive";
+  const col = board.columns.find((c) => c.id === task.columnId);
+  return col?.name ?? "?";
+}
+
 /** Mail body sent to an assignee on assignment or when their task is moved. */
 function taskMailBody(task, column, actorName) {
+  const locLabel = taskLocationLabel(task);
+  const isOffBoard = task.location === "backlog" || task.location === "archive";
   const lines = [
     `Task: ${task.key ? `[${task.key}] ` : ""}${task.summary}`,
-    `Column: ${column?.name ?? "?"}${
-      column?.jiraStatus ? ` (Jira status: ${column.jiraStatus})` : " (board-only column, no Jira status)"
+    `Column: ${locLabel}${
+      isOffBoard ? " (off-board location)" : column?.jiraStatus ? ` (Jira status: ${column.jiraStatus})` : " (board-only column, no Jira status)"
     }`,
   ];
   if (task.url) lines.push(`Jira: ${task.url}`);
@@ -440,6 +524,7 @@ function taskMailBody(task, column, actorName) {
     `- board_comment_task({ taskId: "${task.id.slice(0, 8)}", text: "..." }) — log progress${
       task.origin === "jira" ? " (also posted to the Jira issue)" : ""
     }`,
+    `- board_progress_task({ taskId: "${task.id.slice(0, 8)}", text: "..." }) — post a work-in-progress note (internal; folded into the description when the task moves). Use this before moving the task onward and if a daemon nudge reminds you.`,
     `- board_split_task({ taskId: "${task.id.slice(0, 8)}", subtasks: [...] }) — subdivide into subtasks${
       task.origin === "jira" ? " (created as real Jira sub-tasks)" : ""
     } if the task is too big for one pass`,
@@ -607,6 +692,50 @@ function importJiraComments(task, commentField) {
   if (task.knownCommentIds.length > 200) task.knownCommentIds.splice(0, task.knownCommentIds.length - 200);
 }
 
+// ── Progress nudge ─────────────────────────────────────────────────────────
+
+/**
+ * Periodically mail in-progress assignees a one-line reminder when they
+ * haven't posted a progress update in a while. Non-fatal: if the assignee is
+ * offline sendMail just returns an error and we move on. One nudge per gap
+ * is enforced via task.lastNudgeTs.
+ */
+function nudgeIdleTasks() {
+  if (board.config.nudgeEnabled === false) return;
+  const intervalMs = Math.max(1, (board.config.nudgeIntervalMin ?? 30)) * 60_000;
+  const now = Date.now();
+  for (const task of board.tasks) {
+    if (!task.assignee) continue;
+    const col = board.columns.find((c) => c.id === task.columnId);
+    // "In progress" = a column mapped to a Jira status whose name suggests
+    // active work, OR any non-board-only column between To Do and Done. We
+    // keep it simple: the column's jiraStatus is one of the in-progress
+    // states, or (board-only fallback) the column id is "inprogress".
+    const inProgress =
+      (col?.jiraStatus && /in[- ]?progress/i.test(col.jiraStatus)) ||
+      col?.id === "inprogress";
+    if (!inProgress) continue;
+    const last = task.lastProgressTs ?? task.progressSince ?? 0;
+    // Don't nudge if there's been progress, or a nudge, within the interval.
+    if (now - last < intervalMs) continue;
+    if (task.lastNudgeTs && now - task.lastNudgeTs < intervalMs) continue;
+    const r = sendMail(
+      HUMAN_AGENT_ID,
+      task.assignee,
+      `Progress check-in: ${task.key ? `[${task.key}] ` : ""}${task.summary}`,
+      [
+        `Quick nudge: you're working on "${task.summary}" (${col?.name ?? "?"}) but haven't posted a progress update in a while.`,
+        `Run board_progress_task({ taskId: "${task.id.slice(0, 8)}", text: "..." }) with what you've done / what's blocking you.`,
+        "",
+        `This keeps the board in sync for the next agent (and folds into the description when the task moves). No reply needed if you're just heads-down — posting progress clears this nudge.`,
+      ].join("\n")
+    );
+    task.lastNudgeTs = now;
+    if (!r.error) taskActivity(task, "board", `nudged ${task.assignee} for a progress update`);
+  }
+  schedulePersistBoard();
+}
+
 // ── Jira sync loop (pull) ────────────────────────────────────────────────────
 
 let boardSyncing = false;
@@ -633,9 +762,11 @@ async function syncBoard(reason = "interval") {
     }
 
     // Pinned tasks (created in Jira from the board) are synced individually so
-    // they stay on the board even when they don't match the JQL.
+    // they stay on the board even when they don't match the JQL. Skip tasks in
+    // backlog/archive — those are local-only locations Jira can't see.
     for (const t of board.tasks) {
       if (t.origin !== "jira" || !t.pinned || have.has(t.key)) continue;
+      if (t.location === "backlog" || t.location === "archive") continue;
       try {
         const iss = await jiraFetch(`/rest/api/3/issue/${t.key}?fields=${JIRA_FIELDS}`);
         have.add(iss.key);
@@ -678,6 +809,9 @@ async function syncBoard(reason = "interval") {
           flagged: null,
           knownCommentIds: [],
           updatedAt: Date.now(),
+          location: "board",
+          level: levelFromIssueType(f.issuetype?.name),
+          epicId: null,
           activity: [{ ts: Date.now(), who: "jira", text: `imported from Jira (status: ${status})` }],
         };
         board.tasks.push(task);
@@ -689,11 +823,18 @@ async function syncBoard(reason = "interval") {
         task.parentKey = f.parent?.key ?? task.parentKey ?? null;
         // Remote status change wins: move the card to the mapped column, even
         // out of a board-only column. Unchanged remote status leaves any local
-        // (board-only) position alone.
-        if (status && status !== task.jiraStatus) {
+        // (board-only) position alone. Backlog/archive are local-only locations
+        // — a Jira status change does NOT pull a task out of them (the operator
+        // decides placement via the board).
+        if (status && status !== task.jiraStatus && task.location === "board") {
           task.jiraStatus = status;
           if (mapped) task.columnId = mapped.id;
           taskActivity(task, "jira", `Jira status changed → ${status}`);
+        } else if (status && status !== task.jiraStatus) {
+          // Task is in backlog/archive; record the remote status change without
+          // relocating it.
+          task.jiraStatus = status;
+          taskActivity(task, "jira", `Jira status changed → ${status} (kept in ${task.location})`);
         }
       }
       importJiraComments(task, f.comment);
@@ -725,20 +866,62 @@ async function syncBoard(reason = "interval") {
 async function boardMove(actorId, taskSpec, columnSpec, note) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  const actor = agentDisplayName(actorId);
+  const target = String(columnSpec ?? "").trim().toLowerCase();
+
+  // Pseudo-locations: "backlog" parks a task off-board in the shared backlog
+  // pool; "archive" is the "done board" — it removes the task from its column
+  // (incl. Done) while keeping the record queryable + restorable. Both are
+  // LOCAL-ONLY: never pushed to Jira, and Jira sync won't override them.
+  if (target === "backlog" || target === "archive") {
+    const from = board.columns.find((c) => c.id === task.columnId);
+    const prevLoc = task.location ?? "board";
+    if (prevLoc !== target || note) {
+      task.location = target;
+      task.columnId = null;
+      const label = target === "archive" ? "Archive" : "Backlog";
+      const fromLabel = from ? `${from.name} → ` : prevLoc !== "board" ? `${prevLoc} → ` : "→ ";
+      taskActivity(task, actor, `moved ${fromLabel}${label}${note ? ` — ${note}` : ""}`);
+    }
+    schedulePersistBoard();
+    return { ok: true, task };
+  }
+
   const column = findBoardColumn(columnSpec);
   if (!column) {
-    return { error: `Column '${columnSpec}' not found (columns: ${board.columns.map((c) => c.name).join(", ")})` };
+    return { error: `Column '${columnSpec}' not found (columns: ${board.columns.map((c) => c.name).join(", ")}, or 'backlog'/'archive')` };
   }
-  const actor = agentDisplayName(actorId);
   const from = board.columns.find((c) => c.id === task.columnId);
+  const prevLoc = task.location ?? "board";
+  const restoring = prevLoc !== "board";
+  // Moving to a real column always (re)homes the task on the board.
+  task.location = "board";
   if (task.columnId !== column.id) {
     task.columnId = column.id;
-    taskActivity(task, actor, `moved ${from ? `${from.name} → ` : "→ "}${column.name}${note ? ` — ${note}` : ""}`);
+    const fromLabel = restoring ? `${prevLoc} → ` : from ? `${from.name} → ` : "→ ";
+    taskActivity(task, actor, `moved ${fromLabel}${column.name}${note ? ` — ${note}` : ""}`);
   } else if (note) {
     taskActivity(task, actor, note);
   }
 
   let warning;
+  // Fold progress entries recorded since the last fold into the description,
+  // so the next column inherits a snapshot of what was done. Only when the
+  // task actually moved column (a no-op move + note shouldn't rewrite it).
+  let folded = 0;
+  if (from && from.id !== column.id) {
+    const entries = progressEntriesSince(task);
+    folded = entries.length;
+    if (folded) {
+      const stamp = new Date().toLocaleString();
+      const block = [
+        `## Progress so far (→ ${column.name}, ${stamp})`,
+        ...entries.map((e) => `- ${e.who}: ${e.text}`),
+      ].join("\n");
+      task.description = (task.description ? task.description.trimEnd() + "\n\n" : "") + block;
+      task.progressSince = Date.now();
+    }
+  }
   // Push the matching Jira transition when moving into a Jira-mapped column.
   if (column.jiraStatus && task.origin === "jira" && jiraCfg() &&
       column.jiraStatus.toLowerCase() !== (task.jiraStatus ?? "").toLowerCase()) {
@@ -750,6 +933,18 @@ async function boardMove(actorId, taskSpec, columnSpec, note) {
       taskActivity(task, "board", warning);
     }
   }
+  // Push the folded description to Jira too (the transition above only moves
+  // status; the new "Progress so far" block is part of the spec to carry over).
+  if (folded && task.origin === "jira" && jiraCfg()) {
+    try {
+      await jiraUpdateIssue(task.key, { description: task.description });
+    } catch (e) {
+      const w = `folded description not pushed to Jira: ${e.message}`;
+      taskActivity(task, "board", w);
+      if (!warning) warning = w;
+    }
+  }
+  if (folded) taskActivity(task, "board", `folded ${folded} progress entr${folded === 1 ? "y" : "ies"} into description`);
   // Tell the assignee their task moved (unless they moved it themselves) —
   // this is what makes board-only columns like "Refine"/"Review" actionable.
   if (task.assignee && task.assignee !== actor) {
@@ -774,11 +969,27 @@ function boardAssign(actorId, taskSpec, assignee, newSession) {
   }
   // Resolve to a canonical live-agent name when possible (accepts id prefixes).
   const targetId = resolveTarget(name);
+  const prevAssignee = task.assignee;
   task.assignee = targetId ? agentDisplayName(targetId) : name;
-  taskActivity(task, actor, `assigned to ${task.assignee}`);
+  // Reassigning to a DIFFERENT agent: the new assignee has no context for this
+  // task, so clear their session (deliver as a new-session task). First
+  // assignment keeps the caller's newSession choice; re-assigning the same
+  // agent (e.g. just to re-notify) does not clear context.
+  const reassigning = prevAssignee != null && prevAssignee !== task.assignee;
+  const clearContext = !!(newSession || reassigning);
+  taskActivity(
+    task,
+    actor,
+    `assigned to ${task.assignee}${reassigning ? " (context cleared for new assignee)" : ""}`
+  );
   let warning;
   if (task.assignee !== actor) {
-    const n = notifyAssignee(actorId, task, "Task assigned", newSession ? { newSession: true } : {});
+    const n = notifyAssignee(
+      actorId,
+      task,
+      reassigning ? "Task reassigned" : "Task assigned",
+      clearContext ? { newSession: true } : {}
+    );
     if (n.warning) warning = `assignee not mailed: ${n.warning}`;
   }
   schedulePersistBoard();
@@ -816,7 +1027,7 @@ async function boardComment(actorId, taskSpec, text) {
       body,
       "",
       `Board task id: ${task.id.slice(0, 8)}`,
-      `Column: ${column?.name ?? "?"}${column?.jiraStatus ? ` (Jira status: ${column.jiraStatus})` : ""}`,
+      `Column: ${taskLocationLabel(task)}${column?.jiraStatus ? ` (Jira status: ${column.jiraStatus})` : ""}`,
       `Run board_get_task({ taskId: "${task.id.slice(0, 8)}" }) for full details and the activity log.`,
     ].join("\n");
     const r = sendMail(actorId, task.assignee, subject, mailBody);
@@ -831,20 +1042,57 @@ async function boardComment(actorId, taskSpec, text) {
 }
 
 /**
+ * Post a progress update on a task. Progress is an internal activity entry
+ * (kind "progress") — it is NOT posted as a Jira comment (unlike
+ * board_comment). It shows up in the task detail modal and, when the task is
+ * moved to the next column, recent progress entries are folded into the
+ * description (and that fold IS pushed to Jira). Progress also resets the
+ * nudge clock for this task.
+ */
+async function boardProgress(actorId, taskSpec, text) {
+  const task = findBoardTask(taskSpec);
+  if (!task) return { error: `Task '${taskSpec}' not found` };
+  const body = String(text ?? "").trim();
+  if (!body) return { error: "Progress text is empty" };
+  const actor = agentDisplayName(actorId);
+  taskActivity(task, actor, body, "progress");
+  // A progress post clears any pending nudge gap for this task.
+  task.lastNudgeTs = Date.now();
+  schedulePersistBoard();
+  return { ok: true, task };
+}
+
+/**
  * Create a board task. With `parent`, it becomes a subtask of that task; when
  * the parent is a Jira issue (or `inJira` is set), a real Jira issue is
  * created too and kept in sync (pinned, so it survives JQL filtering).
  */
-async function boardCreate(actorId, { summary, description, column, parent, inJira } = {}) {
+async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog } = {}) {
   const s = String(summary ?? "").trim();
   if (!s) return { error: "Summary is required" };
   const parentTask = parent ? findBoardTask(parent) : null;
   if (parent && !parentTask) return { error: `Parent task '${parent}' not found` };
-  const col =
-    findBoardColumn(column) ??
-    (parentTask ? board.columns.find((c) => c.id === parentTask.columnId) : null) ??
-    board.columns[0];
+  const toBacklog = !!backlog && !parentTask;
+  const col = toBacklog
+    ? null
+    : (findBoardColumn(column) ??
+      (parentTask ? board.columns.find((c) => c.id === parentTask.columnId) : null) ??
+      board.columns[0]);
   const actor = agentDisplayName(actorId);
+  // Level: explicit > inferred from parentage. A subtask (has a parent) is
+  // "subtask"; an epic's child passed via parent is still a subtask. Epics and
+  // stories are set explicitly by the caller (UI/MCP/agent tool).
+  const lvl = String(level ?? "").trim().toLowerCase();
+  const validLevels = new Set(["epic", "story", "task", "subtask"]);
+  const finalLevel = validLevels.has(lvl)
+    ? lvl
+    : parentTask ? "subtask" : "task";
+  // epicId: optional — links a story to its epic (board id). Validated loosely.
+  let epicRef = null;
+  if (epicId) {
+    const epic = findBoardTask(epicId);
+    if (epic) epicRef = epic.id;
+  }
   const task = {
     id: crypto.randomUUID(),
     key: null,
@@ -853,7 +1101,7 @@ async function boardCreate(actorId, { summary, description, column, parent, inJi
     description: String(description ?? "").trim(),
     url: null,
     jiraStatus: null,
-    columnId: col.id,
+    columnId: col ? col.id : null,
     assignee: null,
     priority: null,
     issueType: null,
@@ -862,11 +1110,16 @@ async function boardCreate(actorId, { summary, description, column, parent, inJi
     flagged: null,
     knownCommentIds: [],
     updatedAt: Date.now(),
+    location: toBacklog ? "backlog" : "board",
+    level: finalLevel,
+    epicId: epicRef,
     activity: [
       {
         ts: Date.now(),
         who: actor,
-        text: `created in ${col.name}${parentTask ? ` as subtask of ${parentTask.key ?? parentTask.id.slice(0, 8)}` : ""}`,
+        text: toBacklog
+          ? `created in Backlog${parentTask ? ` as subtask of ${parentTask.key ?? parentTask.id.slice(0, 8)}` : ""}`
+          : `created in ${col.name}${parentTask ? ` as subtask of ${parentTask.key ?? parentTask.id.slice(0, 8)}` : ""}`,
       },
     ],
   };
@@ -980,6 +1233,10 @@ function boardSetConfig({ config, columns } = {}) {
     for (const k of ["baseUrl", "email", "jql", "projectKey", "issueType", "subtaskIssueType"]) {
       if (typeof config[k] === "string") board.config[k] = config[k].trim();
     }
+    if (typeof config.nudgeEnabled === "boolean") board.config.nudgeEnabled = config.nudgeEnabled;
+    if (typeof config.nudgeIntervalMin === "number" && Number.isFinite(config.nudgeIntervalMin)) {
+      board.config.nudgeIntervalMin = Math.max(1, Math.floor(config.nudgeIntervalMin));
+    }
     // Empty token means "keep the existing one" so the UI never has to echo it.
     if (typeof config.apiToken === "string" && config.apiToken.trim()) {
       board.config.apiToken = config.apiToken.trim();
@@ -1000,10 +1257,11 @@ function boardSetConfig({ config, columns } = {}) {
     }
     if (cleaned.length) {
       board.columns = cleaned;
-      // Re-home tasks whose column disappeared.
+      // Re-home ON-BOARD tasks whose column disappeared. Tasks in backlog or
+      // archive (columnId null) stay put — they're intentionally off-board.
       const ids = new Set(cleaned.map((c) => c.id));
       for (const t of board.tasks) {
-        if (!ids.has(t.columnId)) t.columnId = cleaned[0].id;
+        if (t.columnId && !ids.has(t.columnId)) t.columnId = cleaned[0].id;
       }
     }
   }
@@ -1032,6 +1290,7 @@ function federationState() {
     agents: list,
     messages: messageLog,
     board: boardState(),
+    spawn: spawnState(),
     now: Date.now(),
   };
 }
@@ -1237,6 +1496,13 @@ function handleMessage(agentId, msg, socket) {
       break;
     }
 
+    case "board_progress": {
+      boardProgress(agentId, msg.taskId, msg.text)
+        .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task }))
+        .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
+      break;
+    }
+
     case "board_create": {
       boardCreate(agentId, {
         summary: msg.summary,
@@ -1244,6 +1510,9 @@ function handleMessage(agentId, msg, socket) {
         column: msg.column,
         parent: msg.parent,
         inJira: !!msg.inJira,
+        level: msg.level,
+        epicId: msg.epicId,
+        backlog: !!msg.backlog,
       })
         .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task }))
         .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
@@ -1260,6 +1529,36 @@ function handleMessage(agentId, msg, socket) {
     case "board_flag": {
       const r = boardFlag(agentId, msg.taskId, msg.reason, !!msg.clear);
       reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task, warning: r.warning });
+      break;
+    }
+
+    // ── Agent spawn (orchestrator tools) ────────────────────────────────────
+    case "spawn": {
+      const r = spawnAgent({ cwd: msg.cwd, name: msg.name, model: msg.model, kickoff: msg.kickoff });
+      reply(r.error ? { type: "error", message: r.error } : { type: "spawned", name: r.name });
+      break;
+    }
+    case "spawn_stop": {
+      const r = stopAgent({ name: msg.name });
+      reply(r.error ? { type: "error", message: r.error } : { type: "ok" });
+      break;
+    }
+    case "spawn_state": {
+      reply({ type: "spawn", ...spawnState() });
+      break;
+    }
+    case "spawn_roots": {
+      reply({ type: "spawn_roots", roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] });
+      break;
+    }
+    case "spawn_ls": {
+      const r = listSpawnDir(msg.path || os.homedir());
+      reply(r.error ? { type: "error", message: r.error } : { type: "spawn_ls", dir: r.dir, dirs: r.dirs });
+      break;
+    }
+    case "spawn_set_roots": {
+      const r = setSpawnRoots(msg.roots);
+      reply(r.error ? { type: "error", message: r.error } : { type: "spawn_roots", roots: r.roots });
       break;
     }
 
@@ -1285,6 +1584,285 @@ try {
   UI_HTML = fs.readFileSync(UI_HTML_PATH, "utf8");
 } catch (e) {
   log(`ui.html not found at ${UI_HTML_PATH}: ${e.message}`);
+}
+
+// ── Agent spawning (tmux) ─────────────────────────────────────────────────────
+
+/**
+ * Persisted spawn registry. Maps a tmux session name → metadata about a
+ * daemon-spawned agent (cwd, model, spawnedAt, optional kickoff). The daemon
+ * only ever stops sessions listed here, so an operator-launched tmux/pi is
+ * never killed by stop(). Survives daemon restarts so /restart-mail-daemon
+ * keeps tracking (and can still stop) previously-spawned agents.
+ *
+ * `roots` is the operator-configured allowlist of directories the picker may
+ * browse (in addition to $HOME). Pragmatic, not a security boundary.
+ */
+let spawnRegistry = {
+  /** @type {Record<string, { cwd: string, model?: string, kickoff?: string, spawnedAt: number, agentName?: string }>} */
+  sessions: {},
+  /** @type {string[]} */
+  roots: [],
+};
+
+let spawnPersistTimer = null;
+function schedulePersistSpawn() {
+  if (spawnPersistTimer) return;
+  spawnPersistTimer = setTimeout(() => {
+    spawnPersistTimer = null;
+    flushSpawn();
+  }, 300);
+}
+function flushSpawn() {
+  try {
+    fs.writeFileSync(SPAWN_FILE, JSON.stringify(spawnRegistry), { mode: 0o600 });
+  } catch (e) {
+    log(`spawn persist failed: ${e.message}`);
+  }
+}
+function loadSpawn() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(SPAWN_FILE, "utf8"));
+    if (saved && typeof saved === "object") {
+      if (saved.sessions && typeof saved.sessions === "object") spawnRegistry.sessions = saved.sessions;
+      if (Array.isArray(saved.roots)) spawnRegistry.roots = saved.roots.filter((r) => typeof r === "string");
+    }
+  } catch {
+    // No spawn file yet — defaults apply.
+  }
+  // Reconcile with live tmux: drop tracked sessions whose tmux session no
+  // longer exists (e.g. the agent exited on its own, or tmux was killed
+  // out-of-band). Cheap and keeps the registry honest across restarts.
+  for (const name of Object.keys(spawnRegistry.sessions)) {
+    if (!tmuxSessionExists(name)) delete spawnRegistry.sessions[name];
+  }
+}
+
+/** Default allowlist: $HOME plus any PI_MAIL_SPAWN_ROOTS (colon-separated). */
+function defaultRoots() {
+  const roots = [os.homedir()];
+  const extra = (process.env.PI_MAIL_SPAWN_ROOTS || "").split(":").map((s) => s.trim()).filter(Boolean);
+  for (const r of extra) roots.push(r);
+  return [...new Set(roots)];
+}
+
+/** All roots the picker may browse: ui-configured + env defaults. */
+function spawnRoots() {
+  return [...new Set([...(spawnRegistry.roots || []), ...defaultRoots()])];
+}
+
+/** Resolve and validate a cwd: must be a real directory under an allowed root. */
+function validateSpawnCwd(cwd) {
+  if (!cwd || typeof cwd !== "string") return { error: "cwd is required" };
+  let resolved;
+  try {
+    resolved = path.resolve(cwd);
+  } catch {
+    return { error: `invalid path: ${cwd}` };
+  }
+  let st;
+  try {
+    st = fs.statSync(resolved);
+  } catch {
+    return { error: `not a directory: ${resolved}` };
+  }
+  if (!st.isDirectory()) return { error: `not a directory: ${resolved}` };
+  const roots = spawnRoots().map((r) => {
+    try { return path.resolve(r); } catch { return r; }
+  });
+  const under = roots.some((r) => resolved === r || resolved.startsWith(r + path.sep));
+  if (!under) {
+    return { error: `${resolved} is outside the allowed roots. Add it to the spawn roots (UI settings or PI_MAIL_SPAWN_ROOTS).` };
+  }
+  return { resolved };
+}
+
+/** Sanitise a name for use as a tmux session name (tmux disallows '.' and ':'). */
+function safeSessionName(name) {
+  return String(name || "").replace(/[.:\\]/g, "-").replace(/\s+/g, "-").slice(0, 80);
+}
+
+/** Default agent name: <dir-basename>-<id6>, matching the extension's auto-slug. */
+function defaultSpawnName(cwd) {
+  const base = path.basename(cwd) || "pi-agent";
+  return `${base}-${crypto.randomUUID().slice(0, 6)}`;
+}
+
+function tmuxSessionExists(name) {
+  try {
+    const r = spawnSync(TMUX_BIN, ["has-session", "-t", name]);
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Spawn a fresh pi agent in a tmux session.
+ * @returns {{ ok?: true, name?: string, agentId?: string, warning?: string, error?: string }}
+ */
+function spawnAgent({ cwd, name, model, kickoff }) {
+  const v = validateSpawnCwd(cwd);
+  if (v.error) return { error: v.error };
+  const dir = v.resolved;
+
+  const session = safeSessionName(name?.trim() || defaultSpawnName(dir));
+  if (!session) return { error: "invalid name" };
+  if (spawnRegistry.sessions[session]) {
+    return { error: `a spawned agent named '${session}' already exists` };
+  }
+  if (tmuxSessionExists(session)) {
+    return { error: `a tmux session named '${session}' already exists (not tracked by the daemon)` };
+  }
+
+  // Build the pi invocation. -n sets the session display name (also the
+  // federation agent name once the extension registers). --approve trusts
+  // project-local files for an unattended launch.
+  const args = ["-n", session, "--approve"];
+  if (model && String(model).trim()) args.push("--model", String(model).trim());
+  const piCmd = `${shellQuote(PI_BIN)} ${args.map(shellQuote).join(" ")}`;
+
+  let r;
+  try {
+    // tmux new-session -d: detached. The quoted command runs in the chosen cwd.
+    r = spawnSync(TMUX_BIN, ["new-session", "-d", "-s", session, "-c", dir, piCmd], { cwd: dir });
+  } catch (e) {
+    return { error: `failed to spawn tmux: ${e?.message ?? String(e)}` };
+  }
+  if (r.error || r.status !== 0) {
+    const stderr = (r.stderr ? r.stderr.toString().trim() : "");
+    const hint = r.error?.code === "ENOENT" ? ` (tmux not found at '${TMUX_BIN}')` : "";
+    return { error: `tmux spawn failed${hint}${stderr ? ": " + stderr : ""}` };
+  }
+
+  spawnRegistry.sessions[session] = {
+    cwd: dir,
+    model: model && String(model).trim() ? String(model).trim() : undefined,
+    kickoff: kickoff && String(kickoff).trim() ? String(kickoff).trim() : undefined,
+    spawnedAt: Date.now(),
+    agentName: session,
+  };
+  schedulePersistSpawn();
+  log(`Spawned agent '${session}' in ${dir}`);
+
+  // Best-effort: wait for the agent to register, then deliver the kickoff as a
+  // new-session task. Non-blocking on the reply path — the caller gets the
+  // session name immediately; kickoff delivery is logged in the activity.
+  const kickoffText = spawnRegistry.sessions[session].kickoff;
+  waitForRegistration(session, SPAWN_REGISTER_TIMEOUT_MS)
+    .then((agentId) => {
+      if (agentId) {
+        spawnRegistry.sessions[session].agentId = agentId;
+        schedulePersistSpawn();
+      }
+      if (kickoffText) {
+        // Deliver as the human so the agent treats it as a mail-driven task.
+        const m = sendMail(HUMAN_AGENT_ID, session, "Task: " + kickoffText.split("\n")[0].slice(0, 80), kickoffText, { newSession: true });
+        if (m.error) log(`kickoff delivery to '${session}' failed: ${m.error}`);
+      }
+    })
+    .catch(() => {});
+
+  return { ok: true, name: session, warning: kickoffText ? undefined : undefined };
+}
+
+/**
+ * Stop a daemon-spawned agent: kill its tmux session. Refuses to kill a
+ * session the daemon did not spawn (defence against clobbering operator work).
+ * @returns {{ ok?: true, error?: string }}
+ */
+function stopAgent({ name }) {
+  const session = safeSessionName(name?.trim ? name.trim() : String(name || ""));
+  if (!session) return { error: "name is required" };
+  if (!spawnRegistry.sessions[session]) {
+    return { error: `'${session}' is not a daemon-spawned agent (the daemon only stops agents it spawned)` };
+  }
+  let r;
+  try {
+    r = spawnSync(TMUX_BIN, ["kill-session", "-t", session]);
+  } catch (e) {
+    return { error: `failed to kill tmux: ${e?.message ?? String(e)}` };
+  }
+  // status 1 + "can't find session" is fine — it already exited. Anything else
+  // is a real failure.
+  if (r.error || (r.status !== 0 && !/no (such|session)|can't find|not found/i.test(r.stderr ? r.stderr.toString() : ""))) {
+    const stderr = r.stderr ? r.stderr.toString().trim() : "";
+    return { error: `tmux kill-session failed${stderr ? ": " + stderr : ""}` };
+  }
+  delete spawnRegistry.sessions[session];
+  schedulePersistSpawn();
+  log(`Stopped agent '${session}'`);
+  return { ok: true };
+}
+
+/**
+ * Resolve a recipient spec to an agentId, waiting up to timeoutMs for an agent
+ * matching `name` to register. Used by spawnAgent so the kickoff is delivered
+ * to the freshly-registered agent rather than bouncing as "not found".
+ */
+function waitForRegistration(name, timeoutMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      const id = resolveTarget(name);
+      if (id) return resolve(id);
+      if (Date.now() - start >= timeoutMs) return resolve(null);
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
+}
+
+/** Directory listing for the picker: entries under `dir` if allowed. */
+function listSpawnDir(dir) {
+  const v = validateSpawnCwd(dir);
+  // Allow listing a root itself even when it's the root (validateSpawnCwd
+  // already accepts roots). If invalid, surface the error.
+  if (v.error) return { error: v.error };
+  const resolved = v.resolved;
+  try {
+    const entries = fs.readdirSync(resolved, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => ({ name: e.name, path: path.join(resolved, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { dir: resolved, dirs };
+  } catch (e) {
+    return { error: `could not read ${resolved}: ${e?.message ?? String(e)}` };
+  }
+}
+
+/** Spawned sessions, for the UI/tools: name + cwd + model + live status. */
+function spawnState() {
+  const sessions = Object.entries(spawnRegistry.sessions).map(([name, s]) => ({
+    name,
+    cwd: s.cwd,
+    model: s.model || "",
+    kickoff: s.kickoff || "",
+    spawnedAt: s.spawnedAt,
+    agentName: s.agentName || name,
+    alive: tmuxSessionExists(name),
+  }));
+  return { sessions, roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] };
+}
+
+/** Update the operator-configured roots allowlist. */
+function setSpawnRoots(roots) {
+  if (!Array.isArray(roots)) return { error: "roots must be an array of strings" };
+  spawnRegistry.roots = roots.map((r) => String(r).trim()).filter(Boolean);
+  schedulePersistSpawn();
+  return { ok: true, roots: spawnRoots() };
+}
+
+// Minimal sync helpers (used for tmux probes / spawn). spawnSync is imported
+// lazily so the daemon doesn't pay for it unless spawning is used.
+import { spawnSync } from "node:child_process";
+
+/** Quote a string for safe inclusion in a shell command line. */
+function shellQuote(s) {
+  if (s === "") return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s)) return s;
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
 function readJsonBody(req) {
@@ -1391,6 +1969,13 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/board/progress") {
+      const body = await readJsonBody(req);
+      const r = await boardProgress(HUMAN_AGENT_ID, body.taskId, body.text);
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/board/create") {
       const body = await readJsonBody(req);
       const r = await boardCreate(HUMAN_AGENT_ID, body);
@@ -1422,6 +2007,8 @@ const httpServer = http.createServer(async (req, res) => {
           issueType: board.config.issueType,
           subtaskIssueType: board.config.subtaskIssueType,
           apiTokenSet: !!board.config.apiToken,
+          nudgeEnabled: board.config.nudgeEnabled !== false,
+          nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
         },
         columns: board.columns,
       });
@@ -1445,6 +2032,45 @@ const httpServer = http.createServer(async (req, res) => {
       return;
     }
 
+    // ── Agent spawn endpoints (actor: the human operator / orchestrators) ────
+
+    if (req.method === "GET" && url.pathname === "/api/spawn") {
+      json(res, 200, spawnState());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/spawn/roots") {
+      json(res, 200, { roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spawn/roots") {
+      const body = await readJsonBody(req);
+      const r = setSpawnRoots(body.roots);
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, roots: r.roots });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/spawn/ls") {
+      const r = listSpawnDir(url.searchParams.get("path") || os.homedir());
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, dir: r.dir, dirs: r.dirs });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spawn") {
+      const body = await readJsonBody(req);
+      const r = spawnAgent({ cwd: body.cwd, name: body.name, model: body.model, kickoff: body.kickoff });
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, name: r.name });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spawn/stop") {
+      const body = await readJsonBody(req);
+      const r = stopAgent({ name: body.name });
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true });
+      return;
+    }
+
     json(res, 404, { error: "not found" });
   } catch (e) {
     json(res, 500, { error: e?.message ?? String(e) });
@@ -1459,6 +2085,132 @@ httpServer.on("error", (err) => {
   }
 });
 
+// ── WebSocket terminal: stream a spawned agent's tmux session ────────────────
+//
+// The browser opens a WebSocket at /api/spawn/terminal?name=<session>. The
+// daemon attaches to the tmux session via `script -qec 'tmux attach -t <name>'`
+// which gives a real PTY pair; stdout bytes are forwarded to the WS as binary
+// frames, and incoming WS bytes are written to the PTY stdin (so the browser
+// can type into the live pi TUI). Only sessions the daemon spawned are
+// attachable (defence-in-depth: the picker/stop already gate on tracking).
+//
+// The WS protocol is the minimal one: raw bytes both directions. The browser
+// uses xterm.js to render. No subprotocol, no JSON framing — keeps it cheap.
+httpServer.on("upgrade", (req, socket) => {
+  const url = new URL(req.url, "http://localhost");
+  if (url.pathname !== "/api/spawn/terminal") {
+    socket.destroy();
+    return;
+  }
+  const name = safeSessionName(url.searchParams.get("name") || "");
+  if (!name || !spawnRegistry.sessions[name]) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  if (!tmuxSessionExists(name)) {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  // Minimal RFC6455 server handshake (no deps). The browser speaks standard WS.
+  const key = req.headers["sec-websocket-key"];
+  if (!key) { socket.destroy(); return; }
+  const accept = crypto.createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+  socket.write(
+    "HTTP/1.1 101 Switching Protocols\r\n" +
+    "Upgrade: websocket\r\n" +
+    "Connection: Upgrade\r\n" +
+    `Sec-WebSocket-Accept: ${accept}\r\n` +
+    "\r\n"
+  );
+
+  // Attach to the tmux session through a PTY (script -qec '<cmd>' /dev/null).
+  // -q: quiet (no "Script started" header). -e <cmd>: run cmd under a PTY.
+  const child = spawn("script", ["-qec", `tmux attach -t ${shellQuote(name)}`, "/dev/null"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  log(`Terminal WS attached to '${name}'`);
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    try { child.kill(); } catch {}
+    try { socket.destroy(); } catch {}
+  };
+
+  // tmux stdout → WS: frame as binary (opcode 2).
+  const sendFrame = (buf) => {
+    if (closed || socket.destroyed) return;
+    // Frame: FIN(1) + opcode(2) + mask(0) + len + payload. Server→client is
+    // unmasked per RFC6455.
+    let header;
+    const len = buf.length;
+    if (len < 126) {
+      header = Buffer.alloc(2);
+      header[0] = 0x82; // FIN + binary
+      header[1] = len;
+    } else if (len < 65536) {
+      header = Buffer.alloc(4);
+      header[0] = 0x82;
+      header[1] = 126;
+      header.writeUInt16BE(len, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x82;
+      header[1] = 127;
+      header.writeBigUInt64BE(BigInt(len), 2);
+    }
+    socket.write(Buffer.concat([header, buf]));
+  };
+  child.stdout.on("data", (b) => sendFrame(b));
+  child.stderr.on("data", (b) => sendFrame(b));
+  child.on("exit", () => {
+    // Send a close frame and tear down.
+    if (!closed) { try { socket.write(Buffer.from([0x88, 0x00])); } catch {} }
+    cleanup();
+    log(`Terminal WS detached from '${name}' (tmux attach exited)`);
+  });
+
+  // WS → tmux stdin: decode incoming frames (client→server is masked).
+  let inBuf = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    inBuf = Buffer.concat([inBuf, chunk]);
+    while (inBuf.length >= 2) {
+      const b0 = inBuf[0];
+      const b1 = inBuf[1];
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let len = b1 & 0x7f;
+      let idx = 2;
+      if (len === 126) { if (inBuf.length < 4) return; len = inBuf.readUInt16BE(2); idx = 4; }
+      else if (len === 127) { if (inBuf.length < 10) return; len = Number(inBuf.readBigUInt64BE(2)); idx = 10; }
+      let mask = Buffer.alloc(0);
+      if (masked) { if (inBuf.length < idx + 4) return; mask = inBuf.subarray(idx, idx + 4); idx += 4; }
+      if (inBuf.length < idx + len) return;
+      let payload = inBuf.subarray(idx, idx + len);
+      if (masked) {
+        const out = Buffer.allocUnsafe(len);
+        for (let i = 0; i < len; i++) out[i] = payload[i] ^ mask[i % 4];
+        payload = out;
+      }
+      inBuf = inBuf.subarray(idx + len);
+      if (opcode === 0x8) { cleanup(); return; } // close
+      if (opcode === 0x1 || opcode === 0x2 || opcode === 0x0) { // text / binary / continuation
+        if (child.stdin && !child.stdin.destroyed) child.stdin.write(payload);
+      }
+      if (opcode === 0x9) { // ping → pong
+        const pong = Buffer.alloc(2 + payload.length);
+        pong[0] = 0x8a; pong[1] = payload.length; payload.copy(pong, 2);
+        try { socket.write(pong); } catch {}
+      }
+    }
+  });
+  socket.on("close", cleanup);
+  socket.on("error", cleanup);
+});
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 // Ensure dirs exist
@@ -1467,6 +2219,7 @@ fs.mkdirSync(AGENT_DIR, { recursive: true });
 // Restore history before serving (so the UI shows prior mail immediately)
 loadHistory();
 loadBoard();
+loadSpawn();
 
 // Single-instance guard: if a live daemon already owns the socket, exit
 // quietly instead of stealing it. Without this, concurrent spawn attempts
@@ -1625,6 +2378,11 @@ httpServer.listen(UI_PORT, UI_HOST, () => {
 if (jiraCfg()) syncBoard("startup");
 setInterval(() => syncBoard("interval"), JIRA_SYNC_INTERVAL_MS);
 
+// Progress-nudge loop — mails in-progress assignees who haven't posted
+// progress in a while. Runs every minute; each task gates itself on its own
+// interval.
+setInterval(nudgeIdleTasks, 60_000);
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 function cleanup() {
@@ -1643,6 +2401,12 @@ function cleanup() {
     clearTimeout(boardPersistTimer);
     boardPersistTimer = null;
     flushBoard();
+  }
+  // Flush any pending spawn registry write before exiting.
+  if (spawnPersistTimer) {
+    clearTimeout(spawnPersistTimer);
+    spawnPersistTimer = null;
+    flushSpawn();
   }
   // Flush any pending history write before exiting.
   if (persistTimer) {

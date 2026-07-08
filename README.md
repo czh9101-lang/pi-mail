@@ -115,11 +115,19 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/board/move` | `{ taskId, column, note? }` | Move a task (Jira transition if the column is mapped) |
 | `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package |
 | `POST /api/board/comment` | `{ taskId, text }` | Comment (also posted to Jira for Jira tasks) |
+| `POST /api/board/progress` | `{ taskId, text }` | Post an internal progress update (folded into the description on move; not posted to Jira) |
 | `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`) |
 | `POST /api/board/update` | `{ taskId, summary?, description? }` | Edit summary/description (pushed to Jira for Jira tasks) |
 | `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
 | `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout |
 | `POST /api/board/sync` | — | Force a Jira sync now |
+| `GET /api/spawn` | — | Spawned sessions: name, cwd, model, alive |
+| `POST /api/spawn` | `{ cwd, name?, model?, kickoff? }` | Spawn a fresh agent (tmux); returns `{ name }` |
+| `POST /api/spawn/stop` | `{ name }` | Stop a daemon-spawned agent |
+| `GET /api/spawn/roots` | — | Allowed picker roots |
+| `POST /api/spawn/roots` | `{ roots }` | Set the operator-configured roots allowlist |
+| `GET /api/spawn/ls?path=` | — | List subdirectories under an allowed root |
+| `GET /api/spawn/terminal?name=` | (WebSocket upgrade) | Live PTY stream of the spawned tmux session (raw bytes both ways) |
 
 ## Task board
 
@@ -176,6 +184,145 @@ Agents work tasks with the `board_*` tools (below); the `task-board` skill
 teaches them the workflow, and the `mail-orchestrator` skill tells
 orchestrators to dispatch via `board_assign_task` for board work.
 
+### Progress updates & task detail view
+
+Two activity kinds keep work-in-progress noise out of Jira while still
+forwarding context to the next agent:
+
+- **`board_comment_task`** — a decision/answer that belongs on the record;
+  posted to the Jira issue for Jira tasks.
+- **`board_progress_task`** — a work-in-progress note (what's done, what's
+  blocking). Internal: never becomes a Jira comment. When the task is **moved
+  to the next column**, recent progress entries are folded into a
+  `## Progress so far (→ <column>, <time>)` block appended to the description
+  — and for Jira tasks that folded description is pushed to the issue. So the
+  next agent inherits a snapshot without Jira comment spam.
+
+The web UI's card detail is a **modal**: click a card (or its *Details*
+button) to open a full view — description (incl. any folded progress block),
+the **complete activity timeline** (progress entries marked distinctly),
+subtasks, column instructions, and actions (comment, add progress, move,
+assign, flag/clear, +subtask). It re-renders every 3 s poll, so it stays live.
+
+A **daemon nudge** mails in-progress assignees who haven't posted progress in
+a while (default 30 min; one reminder per gap). The operator can tune or
+disable it in Board → Settings (`nudgeEnabled`, `nudgeIntervalMin`).
+
+## Board MCP server
+
+`mcp/` ships a standalone [Model Context Protocol](https://modelcontextprotocol.io)
+server that exposes the shared task board to external MCP clients (Claude
+Desktop, Cursor, any MCP host) over the **Streamable HTTP** transport
+(`POST`/`GET /mcp`). It is a thin shim over the daemon's existing HTTP
+board API — every tool maps one-to-one onto an `/api/board*` endpoint, so
+all board logic, Jira sync, and assignment notifications stay in the daemon.
+The tool names and parameter shapes mirror the in-pi `board_*` agent tools,
+so an MCP client drives the board the same way an agent does.
+
+Board operations run as the `human` agent (the daemon's HTTP API attributes
+to `HUMAN_AGENT_ID`, same as the web UI). A `--stdio` fallback is available
+for clients that prefer to spawn the server as a subprocess.
+
+### Tools
+
+| MCP tool | Board operation |
+|---|---|
+| `board_list_tasks({ mine? })` | list the board, grouped by column |
+| `board_get_task({ taskId })` | full task detail + activity (id prefix or Jira key) |
+| `board_move_task({ taskId, column, note? })` | move column (Jira-mapped ⇒ Jira transition) |
+| `board_comment_task({ taskId, text })` | add activity comment (⇒ Jira comment for jira tasks) |
+| `board_progress_task({ taskId, text })` | post internal progress note (folded into the description on move; not posted to Jira) |
+| `board_assign_task({ taskId, assignee, newSession? })` | assign + mail the assignee |
+| `board_create_task({ summary, description?, column?, parent?, inJira? })` | create task / subtask |
+| `board_split_task({ taskId, subtasks: [{ summary, description? }] })` | subdivide (Jira sub-tasks under a Jira parent) |
+| `board_update_task({ taskId, summary?, description? })` | edit summary/description (pushed to Jira) |
+| `board_flag_task({ taskId, reason?, clear? })` | mark/clear "unclear" (notifies the operator) |
+| `get_board_config` / `set_board_config({ config })` | read/write board + Jira config |
+| `sync_board` | trigger a manual Jira sync |
+
+### Build & run
+
+```bash
+npm install
+npm run build:mcp                 # tsc → mcp/build/
+node ./mcp/build/index.js         # HTTP server on 127.0.0.1:8787/mcp
+node ./mcp/build/index.js --stdio # (fallback) stdio server
+```
+
+The daemon address is read from env, defaulting to `http://127.0.0.1:1994`.
+The MCP server's own listen address defaults to `127.0.0.1:8787`:
+
+| Env var | Default | Description |
+|---|---|---|
+| `PI_MAIL_BASE_URL` | — | Daemon URL; overrides the host/port below |
+| `PI_MAIL_UI_HOST` | `127.0.0.1` | Daemon host (ignored if `PI_MAIL_BASE_URL` is set) |
+| `PI_MAIL_UI_PORT` | `1994` | Daemon port (ignored if `PI_MAIL_BASE_URL` is set) |
+| `PI_MAIL_MCP_HOST` | `127.0.0.1` | Bind address for the MCP HTTP server |
+| `PI_MAIL_MCP_PORT` | `8787` | Port for the MCP HTTP server |
+
+A `GET /healthz` (and `GET /`) returns `{ ok: true }` for health probes.
+
+### Claude Desktop / remote MCP config
+
+Point the client at the running HTTP endpoint (no subprocess spawn needed):
+
+```jsonc
+{
+  "mcpServers": {
+    "pi-mail-board": {
+      "url": "http://127.0.0.1:8787/mcp"
+    }
+  }
+}
+```
+
+For a local subprocess that prefers stdio, use the `--stdio` arg instead:
+
+```jsonc
+{
+  "mcpServers": {
+    "pi-mail-board": {
+      "command": "node",
+      "args": ["/abs/path/to/pi-mail/mcp/build/index.js", "--stdio"],
+      "env": { "PI_MAIL_BASE_URL": "http://127.0.0.1:1994" }
+    }
+  }
+}
+```
+
+Or, once published, via npx: `"command": "npx", "args": ["-y", "pi-mail-board-mcp", "--stdio"]`.
+
+## Spawning agents
+
+The daemon can bring up a brand-new, long-running pi agent process in a
+chosen working directory — so you (via the board UI) and orchestrators (via
+the `mail_spawn_agent` tool) can spin up fresh workers without opening a
+terminal. Each spawned agent runs in its own detached **tmux** session, which
+gives it a PTY (interactive `pi` works unmodified), is attachable
+(`tmux attach -t <name>`), and survives daemon restarts.
+
+- **From the board UI:** the **➕ Spawn agent** button opens a directory picker
+  (a server-side browser over an allowlist — pragmatic, not a security
+  boundary; default root `$HOME`, extra roots via the picker settings or the
+  `PI_MAIL_SPAWN_ROOTS` env var, colon-separated). Optionally set a name,
+  model, and a kickoff prompt; the new agent appears in the Agents table
+  within a few seconds and is assignable from board cards like any other
+  agent.
+- **From an orchestrator:** `mail_spawn_agent({ cwd, name?, model?, kickoff? })`
+  returns the new agent's name; then `board_assign_task` /
+  `mail_send newSession:true` gives it work. `mail_stop_agent({ name })` tears
+  it down.
+- **Web terminal:** the Agents view has a **Terminal** button on spawned
+  agents that opens a live xterm.js terminal over a WebSocket (`script -qec
+  'tmux attach'` PTY bridge) — real stdin/stdout forwarding of the pi TUI.
+  **Stop** kills only daemon-spawned sessions; an operator-launched agent is
+  never touched.
+
+The set of daemon-spawned sessions is persisted (`~/.pi/agent/mail-spawn.json`)
+and reconciled against live tmux on each daemon start, so a
+`/restart-mail-daemon` keeps tracking (and can still stop) previously-spawned
+agents.
+
 ## Setup
 
 This is a pi package that bundles the extension **and** the `mail-orchestrator`
@@ -212,10 +359,13 @@ needed.
 | `mail_list_agents` | List agents with status, context %, and uptime |
 | `mail_set_name <name>` | Set your display name |
 | `mail_set_status <status>` | Set your status line (empty string clears it) |
+| `mail_spawn_agent { cwd, name?, model?, kickoff? }` | Spawn a fresh pi agent in a directory (tmux); returns its name |
+| `mail_stop_agent { name }` | Stop a daemon-spawned agent (kills its tmux session) |
 | `board_list_tasks` | Task board overview grouped by column (`mine: true` filters to you) |
 | `board_get_task <id>` | Full task detail: description, column instructions, subtasks, activity |
 | `board_move_task` | Move a task to a column (Jira transition if mapped; notifies assignee) |
 | `board_comment_task` | Comment on a task (posted to Jira for Jira tasks) |
+| `board_progress_task` | Post a work-in-progress note on a task — internal (not posted to Jira); folded into the description when the task moves columns |
 | `board_assign_task` | Assign to an agent — assignee gets the task package by mail |
 | `board_create_task` | Create a task; `parent` makes it a subtask (real Jira sub-task under Jira parents), `inJira` creates a top-level Jira issue |
 | `board_split_task` | Subdivide a task into subtasks in one call |
