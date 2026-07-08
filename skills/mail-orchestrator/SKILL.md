@@ -220,45 +220,68 @@ where it left off. This is the exception, not the default.
 
 When in doubt, use `true`. Stale context is the #1 source of worker confusion.
 
-### 5d. Spawning a fresh worker when no agent is running yet
+---
 
-`mail_spawn_agent` brings up a brand-new, long-running pi agent in a working
-directory you choose — a fresh worker for a project that has no live agent yet.
-The daemon spawns it in a detached tmux session (PTY, attachable, survives
-daemon restarts); it registers with the federation within a few seconds.
+## 6. Spawning fresh workers
+
+When none of the currently connected agents is the right fit — typically
+because the work lives in a different project directory that has no live agent
+yet — `mail_spawn_agent` brings up a brand-new, long-running pi agent in a
+working directory you choose. The daemon spawns it in a detached tmux session
+(PTY, attachable, survives daemon restarts); it registers with the federation
+within a few seconds and is then assignable from board cards exactly like any
+other agent.
 
 ```typescript
 mail_spawn_agent({
-  cwd: "/path/to/project",        // required, must be under an allowed root
-  name: "project-worker-1",       // optional; defaults to <dir>-<id6>
+  cwd: "/path/to/project",            // required, must be under an allowed root
+  name: "project-worker-1",           // optional; defaults to <dir>-<id6>
   model: "anthropic/claude-sonnet-4", // optional
-  kickoff: "## Task: ..."          // optional; delivered as a new-session task
+  kickoff: "## Task: ..."              // optional; delivered as a new-session task
 })
 ```
 
-Use this to scale out to a new project directory instead of messaging an
+This is how you scale out to a new project directory instead of messaging an
 already-running agent. The typical flow:
 
-1. `mail_spawn_agent({ cwd })` → get the new agent's name.
-2. Wait for it to register (it shows in `mail_list_agents` within ~seconds).
-3. Give it work: `board_assign_task({ taskId, assignee: name, newSession: true })`
-   or `mail_send({ to: name, newSession: true, ... })`. (If you passed a
-   `kickoff`, that already delivered its first task — skip this.)
-4. Optionally `mail_send({ to: name })` with `mail_set_status` checks as usual.
+1. **Spawn** — `mail_spawn_agent({ cwd })` → note the returned agent name.
+2. **Wait for registration** — it appears in `mail_list_agents()` within a few
+   seconds. Do not dispatch until it is listed.
+3. **Give it work** — `board_assign_task({ taskId, assignee: name, newSession: true })`
+   (preferred when the work is a board task) or
+   `mail_send({ to: name, newSession: true, ... })`. If you passed a `kickoff`
+   prompt to `mail_spawn_agent`, that already delivered its first task as a new
+   session — skip this step.
+4. **Track like any worker** — poll your inbox, follow up with `mail_send`
+   (omit `newSession` for continuations on the same task), and check status via
+   `mail_list_agents()`.
 
-Teardown: `mail_stop_agent({ name })` kills the tmux session — but **only** for
-agents you spawned with `mail_spawn_agent**. It will refuse an operator-launched
-agent. Use it when a worker's job is done so you're not leaving idle processes
-around.
+> **Use `newSession: true` on the first real dispatch.** A freshly spawned
+> agent has an empty context, but you still want `newSession: true` so the task
+> mail is treated as the task root rather than a follow-up to the kickoff.
+> Omit `newSession` only for direct follow-ups on work already in flight.
 
-> The human can also spawn from the board UI (➕ Spawn agent, with a directory
-> picker) and open a live terminal (xterm.js) into the spawned tmux session.
-> Spawned agents appear in the Agents table and are assignable from board cards
-> exactly like any other agent.
+### Teardown with `mail_stop_agent`
+
+```typescript
+mail_stop_agent({ name: "project-worker-1" })
+```
+
+Kills the spawned agent's tmux session. This applies **only** to agents *you*
+spawned with `mail_spawn_agent` — it will refuse an operator-launched agent.
+Use it when a worker's job is done so you're not leaving idle processes around.
+
+Rules:
+- Don't stop a worker that still has in-flight board tasks — check
+  `board_list_tasks({ mine: true })` on its behalf first, or mail it to confirm.
+- Stopping is non-reversible (the session is gone); re-spawn with
+  `mail_spawn_agent` if you need that worker back later.
+- The human can also spawn/stop from the board UI (➕ Spawn agent, with a
+  directory picker) and open a live terminal (xterm.js) into the tmux session.
 
 ---
 
-## 6. Worker Babysitting — The Core of This Skill
+## 7. Worker Babysitting — The Core of This Skill
 
 Workers use less intelligent models. They will:
 - Miss implicit context
@@ -269,15 +292,15 @@ Workers use less intelligent models. They will:
 
 **Rules for writing worker prompts:**
 
-### 6a. Be stupidly explicit
+### 7a. Be stupidly explicit
 State the repo path, the branch, the file, the function name. Don't say "the
 usual config" — paste the relevant snippet. Workers don't have your history.
 
-### 6b. One task per message
+### 7b. One task per message
 Sending two tasks in one message means one of them gets forgotten. If you need
 parallel work, send two separate messages to two workers.
 
-### 6c. State exactly what output you expect
+### 7c. State exactly what output you expect
 ```
 Reply with ONLY:
 - STATUS: ok | blocked | partial
@@ -288,17 +311,17 @@ Reply with ONLY:
 Workers that don't know the expected format will ramble. Rambling is hard to
 synthesise.
 
-### 6d. Give them a "when in doubt" rule
+### 7d. Give them a "when in doubt" rule
 ```
 If you are unsure about anything, reply with STATUS: blocked and describe
 exactly what you need. Do NOT guess or invent.
 ```
 
-### 6e. Cap task complexity
+### 7e. Cap task complexity
 If a task would take you (Opus) more than ~10 minutes, it's too big for one worker.
 Break it into sequential steps and drive each one yourself.
 
-### 6f. Validate before trusting
+### 7f. Validate before trusting
 When a worker says "done", read the output critically. Workers will:
 - Report tests passing when they didn't run them
 - Say "no blockers" when there obviously are some
@@ -308,7 +331,7 @@ If in doubt, run validation commands yourself or send a reviewer worker.
 
 ---
 
-## 7. Inbox Polling & Result Collection
+## 8. Inbox Polling & Result Collection
 
 After dispatching, don't just wait — keep moving on independent work, then poll.
 
@@ -336,7 +359,7 @@ mail_mark_read({ messageId: "abc12345" })
 
 ---
 
-## 8. Handling Worker Problems
+## 9. Handling Worker Problems
 
 ### Worker is blocked
 ```typescript
@@ -376,7 +399,7 @@ synthesise or merge — flag it explicitly and re-run.
 
 ---
 
-## 9. Broadcasting
+## 10. Broadcasting
 
 Use `mail_broadcast` sparingly. Appropriate uses:
 
@@ -390,7 +413,7 @@ Never broadcast task details — send targeted `mail_send` to specific workers.
 
 ---
 
-## 10. Multi-Worker Coordination Patterns
+## 11. Multi-Worker Coordination Patterns
 
 ### Sequential pipeline
 Drive each step yourself. Don't chain workers together — you lose visibility.
@@ -419,7 +442,7 @@ mail_send({ to: "worker-b", subject: "Task B", body: "...", newSession: true })
 
 ---
 
-## 11. Synthesis & Quality Control
+## 12. Synthesis & Quality Control
 
 You own the final output. Workers produce drafts.
 
@@ -442,7 +465,7 @@ mail_set_status({ status: "idle" })
 
 ---
 
-## 12. Quick Reference
+## 13. Quick Reference
 
 ```typescript
 // Setup
@@ -479,7 +502,7 @@ mail_set_status({ status: "idle" })
 
 ---
 
-## 13. Common Mistakes to Avoid
+## 14. Common Mistakes to Avoid
 
 | Mistake | Why it's bad | Fix |
 |---------|-------------|-----|
