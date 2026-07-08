@@ -236,4 +236,11 @@ export function archiveHumanMessage(id) {
   return found;
 }
 
+/** Quote a string for safe inclusion in a shell command line. */
+export function shellQuote(s) {
+  if (s === "") return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s)) return s;
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
 export { schedulePersist, loadHistory, flushHistory };
