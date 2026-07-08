@@ -803,6 +803,29 @@ async function boardComment(actorId, taskSpec, text) {
       taskActivity(task, "board", warning);
     }
   }
+  // Mail the comment to the assignee so new info (e.g. an operator note added
+  // on the website) reaches the agent working the task. The session is left
+  // intact (no newSession) — a comment is a follow-up, not a fresh task.
+  // Skip when there's no assignee or the commenter is the assignee themselves.
+  if (task.assignee && task.assignee !== actor) {
+    const column = board.columns.find((c) => c.id === task.columnId) ?? null;
+    const subject = `Comment on task: ${task.key ? `[${task.key}] ` : ""}${task.summary}`;
+    const mailBody = [
+      `${actor} added a comment to a board task assigned to you:`,
+      "",
+      body,
+      "",
+      `Board task id: ${task.id.slice(0, 8)}`,
+      `Column: ${column?.name ?? "?"}${column?.jiraStatus ? ` (Jira status: ${column.jiraStatus})` : ""}`,
+      `Run board_get_task({ taskId: "${task.id.slice(0, 8)}" }) for full details and the activity log.`,
+    ].join("\n");
+    const r = sendMail(actorId, task.assignee, subject, mailBody);
+    if (r.error) {
+      const w = `comment not mailed to ${task.assignee}: ${r.error}`;
+      taskActivity(task, "board", w);
+      if (!warning) warning = w;
+    }
+  }
   schedulePersistBoard();
   return { ok: true, task, warning };
 }
