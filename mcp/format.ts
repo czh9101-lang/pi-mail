@@ -1,0 +1,126 @@
+/**
+ * Text formatters for board tool output.
+ *
+ * These mirror the rendering in extensions/index.ts (taskLine,
+ * board_get_task, boardOpResult) so MCP clients see the same familiar
+ * output the in-pi board_* tools produce: task id prefix, Jira key,
+ * summary, assignee, status, flags, and the column instructions /
+ * activity log for a single task.
+ */
+
+import type { BoardTask, BoardState, BoardOpResponse } from "./types.js";
+
+/** One compact task line, e.g. `  • [5ccd4c51] PROJ-123 Summary → assignee [jira: In Progress] ⚠unclear`. */
+export function taskLine(t: BoardTask): string {
+  const key = t.key ? `${t.key} ` : "";
+  const who = t.assignee ? ` → ${t.assignee}` : "";
+  const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : "";
+  const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : "";
+  const lvl = t.level && t.level !== "task" ? ` ${t.level}` : "";
+  const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : "";
+  const flag = t.flagged ? ` ⚠unclear` : "";
+  return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${lvl}${loc}${flag}`;
+}
+
+/** Filters for board_list_tasks, mirroring the agent tool's parameters. */
+export interface BoardListFilters {
+  mineAssignee?: string | null;
+  /** Filter to a location: 'board' | 'backlog' | 'archive'. */
+  location?: string;
+  /** Filter to a level: 'epic' | 'story' | 'task' | 'subtask'. */
+  level?: string;
+  /** Include archived tasks (location='archive') in the listing. */
+  includeArchived?: boolean;
+}
+
+/** Render the whole board grouped by location/column (board_list_tasks). */
+export function renderBoard(b: BoardState, filters: BoardListFilters = {}): string {
+  const { mineAssignee, location: wantLoc, level, includeArchived } = filters;
+  let tasks = b.tasks ?? [];
+  if (mineAssignee) tasks = tasks.filter((t) => t.assignee === mineAssignee);
+  if (level) tasks = tasks.filter((t) => (t.level ?? "task") === level);
+  const showArchive = !!includeArchived || wantLoc === "archive";
+  // Default view: board + backlog, archive hidden (it's a filter, per operator).
+  tasks = tasks.filter((t) => {
+    const loc = t.location ?? "board";
+    if (wantLoc) return loc === wantLoc;
+    return loc !== "archive" || showArchive;
+  });
+  if (tasks.length === 0) {
+    return mineAssignee ? `No tasks assigned to ${mineAssignee}.` : "Board is empty.";
+  }
+  const cols = b.columns ?? [];
+  const lines: string[] = [`📋 Task board — ${tasks.length} task(s)`, ""];
+  // Backlog pool (sits above the board) — show first in default/board view.
+  if (!wantLoc || wantLoc === "backlog") {
+    const inBacklog = tasks.filter((t) => (t.location ?? "board") === "backlog");
+    if (mineAssignee ? inBacklog.length : true) {
+      lines.push(`▌ Backlog — ${inBacklog.length} item${inBacklog.length === 1 ? "" : "s"}`);
+      if (!inBacklog.length) lines.push("  (empty)");
+      for (const t of inBacklog) lines.push(taskLine(t));
+      lines.push("");
+    }
+  }
+  for (const col of cols) {
+    const inCol = tasks.filter((t) => (t.location ?? "board") === "board" && t.columnId === col.id);
+    if (mineAssignee && inCol.length === 0) continue;
+    const jira = col.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)";
+    lines.push(`▌ ${col.name}${jira} — ${inCol.length} task${inCol.length === 1 ? "" : "s"}`);
+    for (const t of inCol) lines.push(taskLine(t));
+    lines.push("");
+  }
+  if (showArchive && (!wantLoc || wantLoc === "archive")) {
+    const inArch = tasks.filter((t) => t.location === "archive");
+    lines.push(`▌ Archive (done board) — ${inArch.length} item${inArch.length === 1 ? "" : "s"}`);
+    if (!inArch.length) lines.push("  (empty)");
+    for (const t of inArch) lines.push(taskLine(t));
+  }
+  return lines.join("\n").trimEnd();
+}
+
+/** Render a single task in full (board_get_task). */
+export function renderTask(t: BoardTask, b: BoardState): string {
+  const col = (b.columns ?? []).find((c) => c.id === t.columnId);
+  const lines: string[] = [
+    `Task:     ${t.key ? `[${t.key}] ` : ""}${t.summary}`,
+    `Id:       ${t.id}`,
+    `Column:   ${col?.name ?? t.columnId}${col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)"}`,
+    `Location: ${t.location ?? "board"}${t.level ? ` | Level: ${t.level}` : ""}${t.epicId ? ` | Epic: ${t.epicId.slice(0, 8)}` : ""}`,
+    `Assignee: ${t.assignee ?? "—"}`,
+    `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
+    ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
+    ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
+    ...(t.url ? [`Jira:     ${t.url}`] : []),
+    "─".repeat(40),
+    t.description || "(no description)",
+  ];
+  const children = (b.tasks ?? []).filter((x) => x.parentId === t.id || (t.key && x.parentKey === t.key));
+  if (children.length) {
+    lines.push("", "## Subtasks");
+    for (const c of children) lines.push(taskLine(c));
+  }
+  if (col?.instructions) lines.push("", `## Column instructions ("${col.name}")`, col.instructions);
+  if (t.activity?.length) {
+    lines.push("", "## Activity");
+    for (const a of t.activity.slice(-15)) {
+      const mark = a.kind === "progress" ? " 📈" : "";
+      lines.push(`- ${new Date(a.ts).toLocaleString()} — ${a.who}:${mark} ${a.text}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Find a task by exact id, id-prefix, or (case-insensitive) Jira key. */
+export function findTask(b: BoardState, taskId: string): BoardTask | undefined {
+  const s = taskId.toLowerCase();
+  return (b.tasks ?? []).find(
+    (x) => x.id === taskId || x.id.startsWith(taskId) || (x.key && x.key.toLowerCase() === s),
+  );
+}
+
+/** Format a mutation result as a ✅/❌ line, mirroring boardOpResult. */
+export function renderOpResult(resp: BoardOpResponse, okText: string): string {
+  if (resp.error) return `❌ ${resp.error}`;
+  const warn = resp.warning ? `\n⚠️ ${resp.warning}` : "";
+  return `✅ ${okText}${warn}`;
+}
