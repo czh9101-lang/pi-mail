@@ -137,7 +137,9 @@
   .tcard .assignee.none { color: var(--muted); font-style: italic; border-style: dashed; }
   .tcard select { background: var(--panel); color: var(--dim); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12px; max-width: 118px; }
   .tcard .tdetail { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
-  .tcard .tdesc { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #c9d1d9; max-height: 220px; overflow: auto; }
+  .tcard .tdesc { cursor: pointer; white-space: pre-wrap; font-size: 12px; color: var(--dim); margin-top: 4px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    border-left: 2px solid var(--border); padding-left: 6px; }
   .tcard .tact { margin-top: 8px; }
   .tcard .tact .a { font-size: 11px; color: var(--dim); margin-bottom: 3px; white-space: pre-wrap; }
   .tcard .tact .a b { color: var(--text); font-weight: 600; }

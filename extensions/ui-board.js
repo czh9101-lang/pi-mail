@@ -51,6 +51,16 @@ function taskCard(t, board) {
   sum.addEventListener("click", () => openTaskModal(t.id));
   card.appendChild(sum);
 
+  // Description preview — a few clamped lines so the board is scannable
+  // without opening every card. Click opens the full detail modal.
+  if (t.description && t.description.trim()) {
+    const d = el("div", "tdesc");
+    d.textContent = t.description;
+    d.title = t.description;
+    d.addEventListener("click", () => openTaskModal(t.id));
+    card.appendChild(d);
+  }
+
   const meta = el("div", "tmeta");
   meta.appendChild(el("span", "assignee" + (t.assignee ? "" : " none"), t.assignee || "unassigned"));
   if (t.flagged) {
