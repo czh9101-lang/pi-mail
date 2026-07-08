@@ -288,7 +288,6 @@ let historyAgentId = "";        // selected agent in History tab
 let compose = { to: "", subject: "", body: "", newSession: false }; // sticky compose draft
 // Board UI state that must survive re-renders (poll every 3s)
 let boardUi = {
-  expanded: new Set(),          // task ids with detail open
   taskModalId: null,            // task whose detail modal is open
   settingsOpen: false,
   freshSession: true,           // newSession flag used when assigning
@@ -634,7 +633,10 @@ function renderTaskModal() {
   // Meta badges
   const meta = el("div", "tm-meta");
   const col = (board.columns ?? []).find(c => c.id === t.columnId);
-  meta.appendChild(el("span", "badge " + (col?.jiraStatus ? "jira" : "custom"), col?.name ?? t.columnId));
+  const loc = t.location ?? "board";
+  const locLabel = loc === "backlog" ? "📥 Backlog" : loc === "archive" ? "🗄 Archive" : (col?.name ?? t.columnId ?? "?");
+  meta.appendChild(el("span", "badge " + (loc === "board" && col?.jiraStatus ? "jira" : "custom"), locLabel));
+  if (t.level && t.level !== "task") meta.appendChild(el("span", "badge sub", t.level));
   meta.appendChild(el("span", "assignee" + (t.assignee ? "" : " none"), t.assignee || "unassigned"));
   if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
@@ -717,14 +719,16 @@ function renderTaskModal() {
     if (r.ok) { delete boardUi.draftComments[t.id]; }
   });
   actions.appendChild(pbtn);
-  // Move select
+  // Move select — includes Backlog/Archive pseudo-locations.
   const mv = el("select");
-  for (const c of board.columns) {
-    const o = el("option"); o.value = c.id; o.textContent = c.name;
-    if (c.id === t.columnId) o.selected = true;
-    mv.appendChild(o);
-  }
-  mv.title = "Move to column";
+  const tloc = t.location ?? "board";
+  const mkOpt = (val, label, sel) => { const o = el("option"); o.value = val; o.textContent = label; if (sel) o.selected = true; return o; };
+  if (tloc === "backlog") mv.appendChild(mkOpt("backlog", "📥 Backlog", true));
+  if (tloc === "archive") mv.appendChild(mkOpt("archive", "🗄 Archive", true));
+  for (const c of board.columns) mv.appendChild(mkOpt(c.id, c.name, tloc === "board" && c.id === t.columnId));
+  if (tloc !== "backlog") mv.appendChild(mkOpt("backlog", "📥 Backlog", false));
+  if (tloc !== "archive") mv.appendChild(mkOpt("archive", "🗄 Archive", false));
+  mv.title = "Move to column / backlog / archive";
   mv.addEventListener("change", () => boardPost("/api/board/move", { taskId: t.id, column: mv.value }, "Moved"));
   actions.appendChild(mv);
   // Assign select
@@ -1092,9 +1096,9 @@ function renderBoard() {
     main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config }));
   }
 
-  // New (local) task
+  // New (local) task — supports level (epic/story/task) and a backlog flag.
   const nt = el("div", "newtask");
-  const inSum = el("input"); inSum.placeholder = "New board-only task…"; inSum.value = boardUi.newTask.summary;
+  const inSum = el("input"); inSum.placeholder = "New task summary…"; inSum.value = boardUi.newTask.summary;
   inSum.addEventListener("input", () => boardUi.newTask.summary = inSum.value);
   const colPick = el("select", "agentpick");
   for (const c of board.columns) {
@@ -1103,15 +1107,45 @@ function renderBoard() {
     colPick.appendChild(o);
   }
   colPick.addEventListener("change", () => boardUi.newTask.column = colPick.value);
+  const lvlPick = el("select", "agentpick");
+  for (const lv of ["task", "epic", "story"]) {
+    const o = el("option"); o.value = lv; o.textContent = lv; if (lv === (boardUi.newTask.level || "task")) o.selected = true; lvlPick.appendChild(o);
+  }
+  lvlPick.title = "Issue level";
+  lvlPick.addEventListener("change", () => boardUi.newTask.level = lvlPick.value);
+  const blWrap = el("span", "checkbox");
+  const blCb = el("input"); blCb.type = "checkbox"; blCb.id = "nbl"; blCb.checked = boardUi.newTask.backlog;
+  blCb.addEventListener("change", () => { boardUi.newTask.backlog = blCb.checked; colPick.disabled = blCb.checked; });
+  if (boardUi.newTask.backlog) colPick.disabled = true;
+  const blLbl = el("label", null, "backlog"); blLbl.setAttribute("for", "nbl"); blLbl.style.margin = "0";
+  blWrap.appendChild(blCb); blWrap.appendChild(blLbl);
   const addBtn = el("button", "btn", "Add task");
   addBtn.addEventListener("click", async () => {
     const summary = boardUi.newTask.summary.trim();
     if (!summary) { toast("Give the task a summary", true); return; }
-    const r = await boardPost("/api/board/create", { summary, column: colPick.value }, "Task created");
+    const payload = { summary, level: boardUi.newTask.level, backlog: boardUi.newTask.backlog };
+    if (!boardUi.newTask.backlog) payload.column = colPick.value;
+    const r = await boardPost("/api/board/create", payload, "Task created");
     if (r.ok) { boardUi.newTask.summary = ""; inSum.value = ""; }
   });
-  nt.appendChild(inSum); nt.appendChild(colPick); nt.appendChild(addBtn);
+  nt.appendChild(inSum); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
+
+  // Backlog pool — sits ABOVE the board columns. Items here are not yet
+  // placed on a column (location='backlog', columnId null). Local-only.
+  const backlogTasks = (board.tasks ?? []).filter(t => (t.location ?? "board") === "backlog");
+  if (backlogTasks.length || true) {
+    const bl = el("div", "bcol"); bl.style.flex = "1 1 100%"; bl.style.maxWidth = "none";
+    const blHead = el("div", "bhead");
+    blHead.appendChild(el("span", "bname", "📥 Backlog"));
+    blHead.appendChild(el("span", "badge custom", "off-board"));
+    blHead.appendChild(el("span", "bcount", String(backlogTasks.length)));
+    bl.appendChild(blHead);
+    bl.appendChild(el("div", "binstr", "Items not yet placed on a board column. Use the card's move dropdown to place one onto a column (it then leaves the backlog)."));
+    if (!backlogTasks.length) bl.appendChild(el("div", "empty", "—"));
+    for (const t of backlogTasks) bl.appendChild(taskCard(t, board));
+    main.appendChild(bl);
+  }
 
   // Kanban columns
   const kb = el("div", "board");
@@ -1120,7 +1154,7 @@ function renderBoard() {
     const head = el("div", "bhead");
     head.appendChild(el("span", "bname", c.name));
     head.appendChild(el("span", "badge " + (c.jiraStatus ? "jira" : "custom"), c.jiraStatus ? c.jiraStatus : "board-only"));
-    const tasks = orderColumnTasks((board.tasks ?? []).filter(t => t.columnId === c.id), board);
+    const tasks = orderColumnTasks((board.tasks ?? []).filter(t => (t.location ?? "board") === "board" && t.columnId === c.id), board);
     head.appendChild(el("span", "bcount", String(tasks.length)));
     col.appendChild(head);
     if (c.instructions) col.appendChild(el("div", "binstr", c.instructions));
@@ -1129,6 +1163,22 @@ function renderBoard() {
     kb.appendChild(col);
   }
   main.appendChild(kb);
+
+  // Archive panel — the "done board". Shown only when the status filter
+  // (show done) is on. Archived tasks are removed from their column (incl.
+  // Done) and restorable via the card's move dropdown.
+  if (boardUi.showArchive) {
+    const archTasks = (board.tasks ?? []).filter(t => t.location === "archive");
+    const ar = el("div", "bcol"); ar.style.flex = "1 1 100%"; ar.style.maxWidth = "none";
+    const arHead = el("div", "bhead");
+    arHead.appendChild(el("span", "bname", "🗄 Archive (done board)"));
+    arHead.appendChild(el("span", "badge custom", "off-board"));
+    arHead.appendChild(el("span", "bcount", String(archTasks.length)));
+    ar.appendChild(arHead);
+    if (!archTasks.length) ar.appendChild(el("div", "empty", "—"));
+    for (const t of archTasks) ar.appendChild(taskCard(t, board));
+    main.appendChild(ar);
+  }
 
   // Keep the task detail modal live across the 3s poll re-render.
   renderTaskModal();

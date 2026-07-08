@@ -112,11 +112,11 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/broadcast` | `{ subject, body }` | `{ ok, recipients }` |
 | `POST /api/archive` | `{ id }` | `{ ok }` — archives a message in the human inbox |
 | `GET /api/board` | — | Board snapshot: `{ columns[], tasks[], jiraConfigured, lastSync, syncError }` |
-| `POST /api/board/move` | `{ taskId, column, note? }` | Move a task (Jira transition if the column is mapped) |
+| `POST /api/board/move` | `{ taskId, column, note? }` | Move a task to a column, or to `backlog`/`archive` (off-board; local-only). Jira transition if the column is mapped |
 | `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package |
 | `POST /api/board/comment` | `{ taskId, text }` | Comment (also posted to Jira for Jira tasks) |
 | `POST /api/board/progress` | `{ taskId, text }` | Post an internal progress update (folded into the description on move; not posted to Jira) |
-| `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`) |
+| `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira?, level?, epicId?, backlog? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`; `backlog:true` creates in the Backlog pool; `level` sets epic/story/task/subtask) |
 | `POST /api/board/update` | `{ taskId, summary?, description? }` | Edit summary/description (pushed to Jira for Jira tasks) |
 | `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
 | `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout |
@@ -168,6 +168,33 @@ Assigning a task (UI dropdown or `board_assign_task`) mails the assignee the
 full task package: description, column instructions, and the board-tool crib
 sheet. Moving someone else's task notifies them the same way. The "fresh
 session on assign" checkbox (default on) dispatches with `newSession: true`.
+
+### Backlog, Archive & issue hierarchy
+
+On top of the kanban columns there are two **off-board locations** (both
+local-only — never pushed to Jira, and Jira sync won't override them):
+
+- **Backlog** — a shared pool of items not yet placed on a column. Add items
+  from the UI (the "backlog" checkbox on the new-task row), via
+  `board_create_task` with `backlog: true`, or (via MCP) by creating with
+  `backlog:true`. Place a backlog item onto a board by moving it to a column
+  (the card's move dropdown, `board_move_task`, or `/api/board/move`).
+- **Archive** — the "done board". Moving a task to Archive removes it from its
+column (including Done) while keeping the record queryable and restorable.
+  Archive is a **filter**, not an assignment: archived tasks are hidden by
+  default and revealed by the "show done (archive)" checkbox on the board
+  toolbar (or `includeArchived:true` / `location:"archive"` on
+  `board_list_tasks`). Restore by moving the card back to a column.
+
+To move a task to either location, use the column value `"backlog"` or
+`"archive"` in `board_move_task` / `/api/board/move` (the UI move dropdowns
+list them too).
+
+Tasks also carry a **level** — `epic | story | task | subtask` (default
+`task`, or `subtask` when created under a `parent`). Set it at create time via
+the UI level picker or `board_create_task`'s `level` param. A story may
+reference its epic by board id via `epicId`. Levels are a local hierarchy
+layer for grouping/display; the real Jira issue type stays on `issueType`.
 
 ### Clarity gate
 
@@ -225,13 +252,13 @@ for clients that prefer to spawn the server as a subprocess.
 
 | MCP tool | Board operation |
 |---|---|
-| `board_list_tasks({ mine? })` | list the board, grouped by column |
+| `board_list_tasks({ mine?, location?, level?, includeArchived? })` | list the board by location/column (Backlog, columns, Archive) |
 | `board_get_task({ taskId })` | full task detail + activity (id prefix or Jira key) |
-| `board_move_task({ taskId, column, note? })` | move column (Jira-mapped ⇒ Jira transition) |
+| `board_move_task({ taskId, column, note? })` | move to a column or `backlog`/`archive` (Jira-mapped ⇒ Jira transition; backlog/archive are local-only) |
 | `board_comment_task({ taskId, text })` | add activity comment (⇒ Jira comment for jira tasks) |
 | `board_progress_task({ taskId, text })` | post internal progress note (folded into the description on move; not posted to Jira) |
 | `board_assign_task({ taskId, assignee, newSession? })` | assign + mail the assignee |
-| `board_create_task({ summary, description?, column?, parent?, inJira? })` | create task / subtask |
+| `board_create_task({ summary, description?, column?, parent?, inJira?, level?, epicId?, backlog? })` | create task / subtask (level=epic\|story\|task\|subtask; backlog=true ⇒ Backlog pool) |
 | `board_split_task({ taskId, subtasks: [{ summary, description? }] })` | subdivide (Jira sub-tasks under a Jira parent) |
 | `board_update_task({ taskId, summary?, description? })` | edit summary/description (pushed to Jira) |
 | `board_flag_task({ taskId, reason?, clear? })` | mark/clear "unclear" (notifies the operator) |
