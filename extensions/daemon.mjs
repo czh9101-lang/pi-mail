@@ -126,17 +126,24 @@ const LOCK_FILE = path.join(AGENT_DIR, "mail-daemon.lock");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_HTML_PATH = path.join(__dirname, "ui.html");
+const UI_DIR = __dirname;
 
-// Load the web UI document once at boot (the HTTP module serves it statically).
+// Load the web UI document + split assets once at boot.
 let UI_HTML = "";
 try {
   UI_HTML = fs.readFileSync(UI_HTML_PATH, "utf8");
 } catch (e) {
   log(`ui.html not found at ${UI_HTML_PATH}: ${e.message}`);
 }
+const UI_ASSETS = {
+  "/ui.css": fs.readFileSync(path.join(UI_DIR, "ui.css"), "utf8"),
+  "/ui-core.js": fs.readFileSync(path.join(UI_DIR, "ui-core.js"), "utf8"),
+  "/ui-board.js": fs.readFileSync(path.join(UI_DIR, "ui-board.js"), "utf8"),
+  "/ui-app.js": fs.readFileSync(path.join(UI_DIR, "ui-app.js"), "utf8"),
+};
 
 // Build the HTTP server (REST routes + static UI + WebSocket terminal).
-const httpServer = createHttpServer({ uiHtml: UI_HTML });
+const httpServer = createHttpServer({ uiHtml: UI_HTML, uiAssets: UI_ASSETS });
 
 // HTTP UI bind settings. Override with env vars if needed.
 const UI_HOST = process.env.PI_MAIL_UI_HOST || "0.0.0.0";

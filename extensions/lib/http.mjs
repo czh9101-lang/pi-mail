@@ -42,6 +42,14 @@ import {
   tmuxSessionExists,
 } from "./spawn.mjs";
 
+/** Static UI assets served from the extension dir (loaded once at boot). */
+const UI_ASSET_TYPES = {
+  "/ui.css": "text/css; charset=utf-8",
+  "/ui-core.js": "text/javascript; charset=utf-8",
+  "/ui-board.js": "text/javascript; charset=utf-8",
+  "/ui-app.js": "text/javascript; charset=utf-8",
+};
+
 // ── Federation snapshot (for the UI) ──────────────────────────────────────────
 
 function federationState() {
@@ -100,7 +108,7 @@ function json(res, status, obj) {
 /** Build the HTTP server: REST routes, static UI, and the /api/spawn/terminal
  *  WebSocket upgrade. The caller owns .listen(). `uiHtml` is the pre-loaded
  *  ui.html document (read by the daemon at boot). */
-export function createHttpServer({ uiHtml }) {
+export function createHttpServer({ uiHtml, uiAssets }) {
   const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
@@ -111,6 +119,15 @@ export function createHttpServer({ uiHtml }) {
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(uiHtml);
+      return;
+    }
+
+    // Split UI assets (css/js) served as separate files so ui.html stays small.
+    if (req.method === "GET" && url.pathname in UI_ASSET_TYPES) {
+      const body = uiAssets && uiAssets[url.pathname];
+      if (!body) { json(res, 404, { error: "asset not found" }); return; }
+      res.writeHead(200, { "Content-Type": UI_ASSET_TYPES[url.pathname] });
+      res.end(body);
       return;
     }
 
