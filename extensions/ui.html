@@ -295,6 +295,7 @@ let boardUi = {
   draftComments: {},            // taskId -> comment draft
   colsDraft: null,              // unsaved column edits while settings are open
   showArchive: false,           // status filter: show done (archived) tasks
+  groupFilter: "__all",         // "__all" = every group, else a project group
 };
 let pollTimer = null;
 let lastSig = null;
@@ -322,6 +323,31 @@ function projectOf(cwd) {
   if (!cwd) return "(no project)";
   const parts = cwd.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || cwd;
+}
+/** Project group for a board task: the stamped group wins, else derived from
+ *  the assignee's cwd via state.agents, else null (ungrouped/no-project). */
+function taskGroup(t) {
+  if (t.group) return t.group;
+  if (t.assignee) {
+    const a = (state.agents ?? []).find(x => x.agentName === t.assignee);
+    if (a?.cwd) return projectOf(a.cwd);
+  }
+  return null;
+}
+/** Whether a task passes the current group filter (boardUi.groupFilter). */
+function groupVisible(t) {
+  if (boardUi.groupFilter === "__all") return true;
+  return (taskGroup(t) ?? "(no project)") === boardUi.groupFilter;
+}
+/** All distinct groups present across the current board, sorted, plus a
+ *  leading "(no project)" entry for ungrouped tasks. */
+function boardGroups(board) {
+  const set = new Set();
+  for (const t of (board?.tasks ?? [])) {
+    const g = taskGroup(t);
+    set.add(g ?? "(no project)");
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 function ctxClass(pct) {
   if (pct == null) return "";
@@ -546,6 +572,8 @@ function taskCard(t, board) {
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
   if (t.level && t.level !== "task") meta.appendChild(el("span", "badge sub", t.level));
   if (t.priority) meta.appendChild(el("span", "badge", t.priority));
+  const g = taskGroup(t);
+  if (g && g !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + g + "⟩"));
 
   // Move select — includes the Backlog/Archive pseudo-locations so a card can
   // be parked off-board or sent to the done board from anywhere.
@@ -647,6 +675,8 @@ function renderTaskModal() {
   if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
   if (t.priority) meta.appendChild(el("span", "badge", t.priority));
+  const mg = taskGroup(t);
+  if (mg && mg !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + mg + "⟩"));
   if (t.flagged) {
     const fb = el("span", "badge flag", "⚠ unclear");
     fb.title = "Flagged by " + t.flagged.by + ": " + t.flagged.reason;
@@ -1093,6 +1123,21 @@ function renderBoard() {
   const archLbl = el("label", null, "show done (archive)"); archLbl.setAttribute("for", "fa"); archLbl.style.margin = "0";
   archWrap.appendChild(archCb); archWrap.appendChild(archLbl);
   bar.appendChild(archWrap);
+  // Group filter: focus the board on one project group. The operator sees
+  // all groups; this just hides the others. "__all" = no filter.
+  const groups = boardGroups(board);
+  if (groups.length > 1 || (groups.length === 1 && groups[0] !== "(no project)")) {
+    const gWrap = el("span", "checkbox");
+    const gSel = el("select"); gSel.style.fontSize = "12px";
+    const gAll = el("option"); gAll.value = "__all"; gAll.textContent = "all groups"; if (boardUi.groupFilter === "__all") gAll.selected = true; gSel.appendChild(gAll);
+    for (const g of groups) {
+      const o = el("option"); o.value = g; o.textContent = g; if (boardUi.groupFilter === g) o.selected = true; gSel.appendChild(o);
+    }
+    gSel.addEventListener("change", () => { boardUi.groupFilter = gSel.value; renderBoard(); });
+    gWrap.appendChild(el("label", null, "group:")); gWrap.lastChild.style.margin = "0"; gWrap.lastChild.style.color = "var(--dim)";
+    gWrap.appendChild(gSel);
+    bar.appendChild(gWrap);
+  }
   const settingsBtn = el("button", "btn secondary mini", boardUi.settingsOpen ? "Close settings" : "⚙ Settings");
   settingsBtn.addEventListener("click", async () => {
     boardUi.settingsOpen = !boardUi.settingsOpen;
@@ -1181,7 +1226,7 @@ function renderBoard() {
     const head = el("div", "bhead");
     head.appendChild(el("span", "bname", c.name));
     head.appendChild(el("span", "badge " + (c.jiraStatus ? "jira" : "custom"), c.jiraStatus ? c.jiraStatus : "board-only"));
-    const tasks = orderColumnTasks((board.tasks ?? []).filter(t => (t.location ?? "board") === "board" && t.columnId === c.id), board);
+    const tasks = orderColumnTasks((board.tasks ?? []).filter(t => (t.location ?? "board") === "board" && t.columnId === c.id && groupVisible(t)), board);
     head.appendChild(el("span", "bcount", String(tasks.length)));
     col.appendChild(head);
     if (c.instructions) col.appendChild(el("div", "binstr", c.instructions));
@@ -1195,7 +1240,7 @@ function renderBoard() {
   // (show done) is on. Archived tasks are removed from their column (incl.
   // Done) and restorable via the card's move dropdown.
   if (boardUi.showArchive) {
-    const archTasks = (board.tasks ?? []).filter(t => t.location === "archive");
+    const archTasks = (board.tasks ?? []).filter(t => t.location === "archive" && groupVisible(t));
     const ar = el("div", "bcol"); ar.style.flex = "1 1 100%"; ar.style.maxWidth = "none";
     const arHead = el("div", "bhead");
     arHead.appendChild(el("span", "bname", "🗄 Archive (done board)"));

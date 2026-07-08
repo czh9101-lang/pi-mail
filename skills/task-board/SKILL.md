@@ -34,8 +34,9 @@ every ~60 s, and pushes your column moves back as Jira transitions.
 ```typescript
 board_list_tasks({ mine?: true })          // board overview, grouped by column
 board_get_task({ taskId })                 // full detail: description, instructions, subtasks, activity
-board_move_task({ taskId, column, note? }) // move; Jira-mapped column ⇒ Jira transition
+board_move_task({ taskId, column, note? }) // move; Jira-mapped column ⇒ Jira transition. Folds recent progress into the description
 board_comment_task({ taskId, text })       // activity log; Jira tasks ⇒ Jira comment too
+board_progress_task({ taskId, text })      // post a work-in-progress note (internal; not posted to Jira; folded into the description when the task moves)
 board_assign_task({ taskId, assignee, newSession? }) // mails the assignee the task
 board_create_task({ summary, description?, column?, parent?, inJira? }) // new task / subtask
 board_split_task({ taskId, subtasks: [{ summary, description? }] })     // subdivide a task
@@ -44,6 +45,33 @@ board_flag_task({ taskId, reason?, clear? })           // mark a task as unclear
 ```
 
 `taskId` accepts the 8-char id prefix or the Jira key.
+
+## Progress updates vs comments
+
+Two activity kinds, for two purposes:
+
+- **`board_comment_task`** — a decision, answer, or note that belongs on the
+  record. For Jira tasks it's also posted as a Jira comment (visible to humans
+  in Jira). Use it for things the next person should see as part of the
+  conversation.
+- **`board_progress_task`** — a work-in-progress note (what you've done since
+  the last update, what's blocking you). It is **internal**: it never becomes a
+  Jira comment. Instead, when the task is **moved to the next column**, the
+  progress entries recorded since the last move are folded into a
+  `## Progress so far (→ <column>, <time>)` block appended to the description
+  — and for Jira tasks that folded description is pushed to the issue. So the
+  next agent (and the operator reading the card) inherit a snapshot of what
+  was done, without cluttering Jira with per-step comments.
+
+Rule of thumb: **post a `board_progress_task` update before moving a task
+onward** (and when you hit a blocker), so the next column starts informed.
+
+### Daemon nudge
+
+If an in-progress task of yours goes quiet for a while (default 30 min), the
+  daemon mails you a one-line reminder to post progress. Replying with
+  `board_progress_task` clears it. The operator can tune or disable the nudge
+  in Board → Settings.
 
 ## Clarity gate — before you start ANY assigned task
 
@@ -76,6 +104,9 @@ with `board_update_task` (this pushes to Jira) and clear the flag with
    — for Jira tasks these comments land on the issue, visible to the human.
    Comments made in Jira by humans flow back into the task's activity (synced
    every ~60 s), so re-check `board_get_task` when waiting on an answer.
+   Post work-in-progress notes with `board_progress_task` — especially before
+   moving the task onward, so the next column (and the operator) inherit a
+   snapshot of what was done.
 6. When done, move the task onward (e.g. `Review` or `Done` — follow the column
    instructions for where work goes next) and **mail a short summary to whoever
    assigned it** (the sender of the assignment mail). The board move alone is
@@ -121,9 +152,10 @@ Prefer the board over ad-hoc task mail — it gives the human a live view:
 4. Decompose big tickets with `board_split_task`, then assign each subtask to
    a different worker — parallel work stays visible under the parent.
 5. Track progress via `board_list_tasks` and task activity; nudge silent
-   workers by mail. Watch for ⚠ unclear flags — resolve them (answer via
-   comment, tighten the description with `board_update_task`, clear the flag)
-   before re-dispatching.
+   workers by mail (the daemon also auto-nudges in-progress assignees who
+   haven't posted progress in a while). Watch for ⚠ unclear flags — resolve
+   them (answer via comment, tighten the description with `board_update_task`,
+   clear the flag) before re-dispatching.
 6. Follow-ups that don't belong in Jira: `board_create_task` (local task).
 
 ## Rules
