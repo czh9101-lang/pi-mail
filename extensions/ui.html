@@ -881,7 +881,8 @@ async function spawnLs(path) {
   spawnUi.loadingLs = true;
   if (document.getElementById("spawnModal")) renderSpawnModal();
   try {
-    const r = await fetch("/api/spawn/ls?path=" + encodeURIComponent(path)).then(r => r.json());
+    const hidden = spawnUi.showHidden ? "&hidden=1" : "";
+    const r = await fetch("/api/spawn/ls?path=" + encodeURIComponent(path) + hidden).then(r => r.json());
     if (r.ok) { spawnUi.path = r.dir; spawnUi.dirs = r.dirs; spawnUi.manualMode = false; }
     else { spawnUi.dirs = []; toast("❌ " + (r.error || "ls failed"), true); }
   } catch (e) { toast("❌ ls failed: " + e.message, true); }
@@ -939,6 +940,15 @@ function renderSpawnModal() {
   const kickL = el("label", null, "Kickoff prompt (optional — sent as a new-session task once the agent registers)");
   card.appendChild(kickL);
   const kickIn = el("textarea"); kickIn.rows = 3; kickIn.placeholder = "e.g. /new-task Implement the auth refactor"; card.appendChild(kickIn);
+
+  // Show hidden (dot-) directories in the picker above. Off by default so the
+  // list stays tidy; toggle re-fetches the current directory.
+  const hidWrap = el("span", "checkbox");
+  const hidCb = el("input"); hidCb.type = "checkbox"; hidCb.id = "sh"; hidCb.checked = !!spawnUi.showHidden;
+  hidCb.addEventListener("change", () => { spawnUi.showHidden = hidCb.checked; spawnLs(spawnUi.path); });
+  const hidLab = el("label"); hidLab.htmlFor = "sh"; hidLab.textContent = "Show hidden directories";
+  hidWrap.appendChild(hidCb); hidWrap.appendChild(hidLab);
+  card.appendChild(hidWrap);
 
   const row = el("div", "row");
   const cancel = el("button", "btn secondary", "Cancel");

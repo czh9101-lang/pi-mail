@@ -1630,7 +1630,7 @@ function handleMessage(agentId, msg, socket) {
       break;
     }
     case "spawn_ls": {
-      const r = listSpawnDir(msg.path || os.homedir());
+      const r = listSpawnDir(msg.path || os.homedir(), { hidden: !!msg.hidden });
       reply(r.error ? { type: "error", message: r.error } : { type: "spawn_ls", dir: r.dir, dirs: r.dirs });
       break;
     }
@@ -1863,15 +1863,16 @@ function waitForRegistration(name, timeoutMs) {
 }
 
 /** Directory listing for the picker: subdirectories of `dir` (any path on the
- *  filesystem). validateSpawnCwd only checks it's a real directory. */
-function listSpawnDir(dir) {
+ *  filesystem). validateSpawnCwd only checks it's a real directory. When
+ *  `hidden` is true, dot-directories (e.g. .git, .config) are included too. */
+function listSpawnDir(dir, { hidden = false } = {}) {
   const v = validateSpawnCwd(dir);
   if (v.error) return { error: v.error };
   const resolved = v.resolved;
   try {
     const entries = fs.readdirSync(resolved, { withFileTypes: true });
     const dirs = entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .filter((e) => e.isDirectory() && (hidden || !e.name.startsWith(".")))
       .map((e) => ({ name: e.name, path: path.join(resolved, e.name) }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return { dir: resolved, dirs };
@@ -2080,7 +2081,7 @@ const httpServer = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/spawn/ls") {
-      const r = listSpawnDir(url.searchParams.get("path") || os.homedir());
+      const r = listSpawnDir(url.searchParams.get("path") || os.homedir(), { hidden: url.searchParams.get("hidden") === "1" });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, dir: r.dir, dirs: r.dirs });
       return;
     }
