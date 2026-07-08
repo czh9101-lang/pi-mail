@@ -275,4 +275,6 @@ export {
   spawnState,
   listSpawnDir,
   spawnRegistry,
+  safeSessionName,
+  tmuxSessionExists,
 };
