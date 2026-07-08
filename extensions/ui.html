@@ -355,8 +355,14 @@ async function refresh() {
     //  - never re-render while the user is focused inside <main> (typing),
     //  - and skip when nothing actually changed.
     const focusedInMain = document.activeElement && main.contains(document.activeElement);
+    // Also suppress the poll re-render while the task detail modal is open and
+    // focused — the modal lives in <body> (not #main), so the guard above
+    // misses it and the 3s rebuild would dismiss the on-screen keyboard and
+    // reset scroll every tick.
+    const taskModal = document.getElementById("task-modal");
+    const focusedInModal = !!taskModal && document.activeElement && taskModal.contains(document.activeElement);
     const sig = JSON.stringify([state.agents, state.messages, state.board]);
-    if (focusedInMain) { lastSig = sig; return; }
+    if (focusedInMain || focusedInModal) { lastSig = sig; return; }
     if (sig !== lastSig) { lastSig = sig; render(); }
   } catch (e) {
     $("#status").innerHTML = "";
@@ -771,8 +777,29 @@ function renderTaskModal() {
   actions.appendChild(sub);
   fsec.appendChild(actions);
   card.appendChild(fsec);
+  // Preserve scroll positions of the description + activity containers and
+  // the textarea's focus/selection across the poll-driven rebuild, so reading
+  // a long activity log isn't reset to the top every 3s. (The focus guard in
+  // refresh() already suppresses re-render while typing; this covers passive
+  // reading and any render that slips through.)
+  let descScroll = 0, actScroll = 0, taFocus = false, taStart = 0, taEnd = 0;
+  {
+    const oldDesc = m.querySelector(".tm-desc"); if (oldDesc) descScroll = oldDesc.scrollTop;
+    const oldAct = m.querySelector(".tm-act"); if (oldAct) actScroll = oldAct.scrollTop;
+    const oldTa = m.querySelector("textarea");
+    if (oldTa) {
+      taFocus = document.activeElement === oldTa;
+      taStart = oldTa.selectionStart ?? 0; taEnd = oldTa.selectionEnd ?? 0;
+    }
+  }
   m.innerHTML = "";
   m.appendChild(card);
+  const newDesc = m.querySelector(".tm-desc"); if (newDesc) newDesc.scrollTop = descScroll;
+  const newAct = m.querySelector(".tm-act"); if (newAct) newAct.scrollTop = actScroll;
+  if (taFocus) {
+    const newTa = m.querySelector("textarea");
+    if (newTa) { newTa.focus(); try { newTa.setSelectionRange(taStart, taEnd); } catch {} }
+  }
 }
 
 /** Order a column's tasks so subtasks follow their parent when co-located. */
