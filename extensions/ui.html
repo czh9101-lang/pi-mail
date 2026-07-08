@@ -863,13 +863,51 @@ function renderHistory() {
   card.appendChild(list);
   main.appendChild(card);
 
-  pick.addEventListener("change", () => { historyAgentId = pick.value; renderHistory(); });
+  pick.addEventListener("change", () => { historyAgentId = pick.value; syncHash(); renderHistory(); });
 }
 
-// ── Tabs + polling ───────────────────────────────────────────────────────────
+// ── URL routing + tabs + polling ─────────────────────────────────────────────
+// The active tab (and the selected agent in History) live in the URL hash so
+// a page refresh — or browser back/forward — restores the view instead of
+// always dropping back onto the Agents tab. setTab updates state, renders
+// synchronously (so immediate follow-ups like scrollIntoView still work), and
+// pushes the hash; the hashchange listener handles navigations that arrive
+// from outside setTab (back/forward, initial deep-link) and no-ops when the
+// hash already matches in-memory state (no render loop).
+const VALID_TABS = ["agents", "board", "mailbox", "history"];
+
+function routeFor(tab, agentId) {
+  if (tab === "history" && agentId) return "history/" + agentId;
+  return tab;
+}
+function parseRoute(hash) {
+  const h = (hash || "").replace(/^#\/?/, ""); // strip leading "#" and optional "/"
+  const [tab, agentId] = h.split("/");
+  if (!VALID_TABS.includes(tab)) return { tab: "agents", agentId: "" };
+  return { tab, agentId: agentId || "" };
+}
+// Apply the URL hash to in-memory state; returns true if it changed anything
+// (so the caller can skip a redundant re-render). Does not touch the hash.
+function applyRouteFromHash() {
+  const { tab, agentId } = parseRoute(location.hash);
+  let changed = false;
+  if (tab !== currentTab) { currentTab = tab; changed = true; }
+  if (tab === "history" && agentId && agentId !== historyAgentId) { historyAgentId = agentId; changed = true; }
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x.dataset.tab === currentTab));
+  return changed;
+}
+// Push the current tab (+ history selection) into the URL hash. No-op if it
+// already matches, so this never triggers a hashchange→render loop. Uses the
+// "/" prefix so the fragment never matches a real element id (no scroll jump).
+function syncHash() {
+  const want = "#/" + routeFor(currentTab, currentTab === "history" ? historyAgentId : "");
+  if (location.hash !== want) location.hash = want;
+}
+
 function setTab(name) {
   currentTab = name;
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
+  syncHash();
   render();
 }
 
@@ -877,6 +915,11 @@ document.querySelectorAll("nav button").forEach(b => {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 });
 
+window.addEventListener("hashchange", () => { if (applyRouteFromHash()) render(); });
+
+// Restore the view from the URL before the first render so a refresh keeps
+// you on the page you were on (instead of always landing on Agents).
+applyRouteFromHash();
 refresh();
 pollTimer = setInterval(refresh, 3000);
 </script>
