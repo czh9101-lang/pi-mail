@@ -435,19 +435,21 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
       name: Type.Optional(Type.String({ description: "Optional agent/session name (defaults to <dir-basename>-<id6>)" })),
       model: Type.Optional(Type.String({ description: "Optional model, e.g. 'anthropic/claude-sonnet-4' (defaults to pi's default)" })),
       kickoff: Type.Optional(Type.String({ description: "Optional kickoff prompt; delivered to the new agent as a new-session task once it registers" })),
+      favorite: Type.Optional(Type.Boolean({ description: "If true, mark this project dir as a favorite (shown at the top of mail_list_projects and the UI picker). Use for projects you spawn into often." })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
       try {
         const resp = await ctx.client.request<{ type: string; name?: string; message?: string }>(
-          { type: "spawn", cwd: params.cwd, name: params.name, model: params.model, kickoff: params.kickoff },
+          { type: "spawn", cwd: params.cwd, name: params.name, model: params.model, kickoff: params.kickoff, favorite: params.favorite },
           45_000
         );
         if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
         const name = resp.name ?? "";
+        const fav = params.favorite ? " · ⭐ favorited" : "";
         const kick = params.kickoff ? ` (kickoff delivered as new-session task)` : "";
         return {
-          content: [{ type: "text" as const, text: `✅ Spawned agent '${name}' in ${params.cwd}${kick}. It will appear in mail_list_agents shortly; assign it work with board_assign_task or mail_send(newSession:true).` }],
+          content: [{ type: "text" as const, text: `✅ Spawned agent '${name}' in ${params.cwd}${kick}${fav}. It will appear in mail_list_agents shortly; assign it work with board_assign_task or mail_send(newSession:true).` }],
           details: { name, cwd: params.cwd },
         };
       } catch (err: unknown) {
@@ -477,6 +479,90 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
         );
         if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
         return { content: [{ type: "text" as const, text: `✅ Stopped agent '${params.name}'` }] };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  // ── Project history + favorites (spawn-agent “recent projects”) ──────────────
+  //
+  // The daemon tracks every dir you spawn an agent into (recent history) plus
+  // a starred set (favorites), shared across the federation and persisted to
+  // disk. mail_list_projects surfaces them so an orchestrator can pick a cwd
+  // to spawn into without browsing the filesystem each time. mail_set_project_favorite
+  // stars/unstars a dir (also doable in one shot via mail_spawn_agent's `favorite` param).
+
+  pi.registerTool({
+    name: "mail_list_projects",
+    label: "Mail: Projects",
+    description:
+      "List recently-spawned project directories (history) and favorited project directories, tracked by the daemon across the federation. Each entry shows the cwd, whether a spawned agent is currently running in it, and (for history) the last spawn time + count. Use to pick a working directory for mail_spawn_agent instead of browsing the filesystem each time.",
+    promptSnippet: "List recent + favorite spawn project dirs",
+    promptGuidelines: [
+      "Use mail_list_projects before mail_spawn_agent to find a known project dir quickly.",
+      "Favorites persist and are shared federation-wide; star dirs you spawn into often with mail_set_project_favorite or the `favorite` param on mail_spawn_agent.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _onUpdate, _ctx) {
+      if (!ctx.connected || !ctx.client) return ctx.notConnected;
+      try {
+        const resp = await ctx.client.request<{ type: string; favorites?: Array<{ cwd: string; alive: boolean }>; history?: Array<{ cwd: string; alive: boolean; lastSpawnedAt: number; count: number; lastName?: string }> }>(
+          { type: "spawn_projects" },
+          10_000
+        );
+        if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${(resp as { message?: string }).message ?? "unknown"}` }] };
+        const favs = resp.favorites ?? [];
+        const hist = resp.history ?? [];
+        const lines: string[] = [];
+        if (favs.length) {
+          lines.push(`⭐ Favorites (${favs.length})`);
+          for (const f of favs) lines.push(`  • ${f.cwd}${f.alive ? "  · live agent running" : ""}`);
+          lines.push("");
+        }
+        if (hist.length) {
+          lines.push(`🕒 Recent projects (${hist.length})`);
+          for (const h of hist) {
+            const when = new Date(h.lastSpawnedAt).toLocaleString();
+            lines.push(`  • ${h.cwd}${h.alive ? "  · live" : ""}  · ${when} (×${h.count}${h.lastName ? `, last “${h.lastName}”` : ""})`);
+          }
+        }
+        if (!lines.length) lines.push("(no projects yet — spawn an agent to start tracking recent dirs)");
+        const body = `📂 Projects — ${favs.length} favorite${favs.length === 1 ? "" : "s"}, ${hist.length} recent\n\n${lines.join("\n")}`;
+        return {
+          content: [{ type: "text" as const, text: body }],
+          details: { favorites: favs, history: hist },
+        };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "mail_set_project_favorite",
+    label: "Mail: Favorite Project",
+    description:
+      "Star or unstar a project directory as a favorite (tracked by the daemon, shared federation-wide). Favorited dirs appear at the top of mail_list_projects and the web UI spawn picker. Use to mark project dirs you spawn agents into often. Returns the updated projects list.",
+    promptSnippet: "Star/unstar a spawn project dir",
+    promptGuidelines: [
+      "Favorite a project dir with mail_set_project_favorite when you expect to spawn agents into it repeatedly.",
+      "You can also favorite at spawn time via the `favorite` param on mail_spawn_agent.",
+    ],
+    parameters: Type.Object({
+      cwd: Type.String({ description: "Absolute project directory to favorite/unfavorite" }),
+      favorite: Type.Boolean({ description: "true to add to favorites, false to remove" }),
+    }),
+    async execute(_id, params, _signal, _onUpdate, _ctx) {
+      if (!ctx.connected || !ctx.client) return ctx.notConnected;
+      try {
+        const resp = await ctx.client.request<{ type: string; favorite?: boolean; message?: string }>(
+          { type: "spawn_favorite", cwd: params.cwd, favorite: params.favorite },
+          10_000
+        );
+        if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
+        const state = resp.favorite ? "⭐ favorited" : "unfavorited";
+        return { content: [{ type: "text" as const, text: `✅ ${params.cwd} — ${state}` }] };
       } catch (err: unknown) {
         return errText(err);
       }

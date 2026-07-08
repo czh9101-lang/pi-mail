@@ -43,6 +43,8 @@ import {
   spawnRegistry,
   safeSessionName,
   tmuxSessionExists,
+  setFavorite,
+  projectsState,
 } from "./spawn.mjs";
 
 /** Static UI assets served from the extension dir (loaded once at boot). */
@@ -405,6 +407,20 @@ export function createHttpServer({ uiHtml, uiAssets }) {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/spawn/projects") {
+      json(res, 200, projectsState());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/spawn/favorite") {
+      const body = await readJsonBody(req);
+      if (!body.cwd || typeof body.cwd !== "string") { json(res, 400, { ok: false, error: "Missing 'cwd'" }); return; }
+      const favorite = !!body.favorite;
+      const nowFav = setFavorite(body.cwd, favorite);
+      json(res, 200, { ok: true, favorite: nowFav, ...projectsState() });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/spawn/ls") {
       const r = listSpawnDir(url.searchParams.get("path") || os.homedir(), { hidden: url.searchParams.get("hidden") === "1" });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, dir: r.dir, dirs: r.dirs });
@@ -413,7 +429,7 @@ export function createHttpServer({ uiHtml, uiAssets }) {
 
     if (req.method === "POST" && url.pathname === "/api/spawn") {
       const body = await readJsonBody(req);
-      const r = spawnAgent({ cwd: body.cwd, name: body.name, model: body.model, kickoff: body.kickoff });
+      const r = spawnAgent({ cwd: body.cwd, name: body.name, model: body.model, kickoff: body.kickoff, favorite: body.favorite });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, name: r.name });
       return;
     }

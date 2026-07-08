@@ -35,12 +35,61 @@ function agentPickList() {
 }
 
 function isSubtask(t) { return !!(t.parentId || t.parentKey); }
+
+/** Attach HTML5 drag-and-drop handlers to a column element so task cards can
+ *  be dropped onto it. Reuses the existing /api/board/move endpoint with the
+ *  given column spec (a column id, or "backlog"/"archive"). A depth counter
+ *  tracks dragenter/dragleave across child elements so the highlight doesn't
+ *  flicker as the pointer moves over cards inside the column. */
+function makeDropTarget(colEl, columnSpec) {
+  let depth = 0;
+  colEl.addEventListener("dragenter", (e) => {
+    if (!boardUi.dragTaskId) return;
+    e.preventDefault();
+    depth++;
+    colEl.classList.add("drag-over");
+  });
+  colEl.addEventListener("dragover", (e) => {
+    if (!boardUi.dragTaskId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  });
+  colEl.addEventListener("dragleave", () => {
+    depth--;
+    if (depth <= 0) { depth = 0; colEl.classList.remove("drag-over"); }
+  });
+  colEl.addEventListener("drop", (e) => {
+    e.preventDefault();
+    depth = 0;
+    colEl.classList.remove("drag-over");
+    let id = boardUi.dragTaskId;
+    if (!id) { try { id = e.dataTransfer.getData("text/plain") || null; } catch { id = null; } }
+    boardUi.dragTaskId = null;
+    if (id) boardPost("/api/board/move", { taskId: id, column: columnSpec }, "Moved");
+  });
+}
 function childrenOf(t, board) {
   return (board.tasks ?? []).filter(x => x.parentId === t.id || (t.key && x.parentKey === t.key));
 }
 
 function taskCard(t, board) {
   const card = el("div", "tcard" + (t.flagged ? " flagged" : "") + (isSubtask(t) ? " subtask" : ""));
+  // Drag-and-drop: make the card draggable. The drop is handled by the
+  // column (see makeDropTarget), which calls /api/board/move with the task
+  // id and the target column id. dragTaskId also suppresses the 3s poll
+  // re-render so the dragged element isn't rebuilt mid-drag.
+  card.draggable = true;
+  card.addEventListener("dragstart", (e) => {
+    boardUi.dragTaskId = t.id;
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", t.id); } catch {}
+  });
+  card.addEventListener("dragend", () => {
+    boardUi.dragTaskId = null;
+    card.classList.remove("dragging");
+    document.querySelectorAll(".bcol.drag-over").forEach(c => c.classList.remove("drag-over"));
+  });
   const sum = el("div", "tsum");
   if (t.key) {
     const k = el(t.url ? "a" : "span", "tkey", "[" + t.key + "]");
@@ -464,6 +513,30 @@ function renderSpawnModal() {
   const card = el("div", "card");
   card.appendChild(el("h3", null, "➕ Spawn a fresh agent"));
 
+  // Recent + favorite projects quick-pick (tracked by the daemon). Clicking a
+  // chip jumps the picker straight to that dir. Favorites are starred.
+  const projects = state.spawn?.projects;
+  const favs = (projects?.favorites || []).map((f) => ({ cwd: f.cwd, fav: true, alive: f.alive }));
+  const recents = (projects?.history || [])
+    .filter((h) => !favs.some((f) => f.cwd === h.cwd))
+    .slice(0, 8)
+    .map((h) => ({ cwd: h.cwd, fav: false, alive: h.alive }));
+  const quick = [...favs, ...recents];
+  if (quick.length) {
+    card.appendChild(el("label", null, "Recent / favorite projects"));
+    const chips = el("div", "chips");
+    for (const q of quick) {
+      const dot = q.alive ? " 🟢" : "";
+      const star = q.fav ? "⭐ " : "";
+      const b = el("button", "chip");
+      b.title = q.cwd;
+      b.textContent = star + q.cwd.replace(/^.*\//, "") + dot;
+      b.addEventListener("click", () => { spawnUi.manualMode = false; spawnLs(q.cwd); });
+      chips.appendChild(b);
+    }
+    card.appendChild(chips);
+  }
+
   // Directory picker
   card.appendChild(el("label", null, "Working directory (cwd)"));
   const picker = el("div", "picker");
@@ -488,9 +561,24 @@ function renderSpawnModal() {
   });
   picker.appendChild(dirSel);
   card.appendChild(picker);
-  // Crumbs + manual path input
+  // Crumbs + favorite-this-dir toggle + manual path input
   const crumbs = el("div", "crumbs"); crumbs.textContent = spawnUi.path || "(pick a directory)";
-  card.appendChild(crumbs);
+  const curCwd = spawnUi.manualMode ? "" : spawnUi.path;
+  const isFav = !!(curCwd && (state.spawn?.projects?.favorites || []).some((f) => f.cwd === curCwd));
+  const starBtn = el("button", "btn secondary mini");
+  starBtn.title = "Toggle favorite for this project dir";
+  starBtn.textContent = isFav ? "★ favorited" : "☆ favorite";
+  starBtn.addEventListener("click", async () => {
+    const cwd = spawnUi.manualMode ? manualIn.value.trim() : spawnUi.path;
+    if (!cwd) { toast("❌ pick a directory first", true); return; }
+    const currently = (state.spawn?.projects?.favorites || []).some((f) => f.cwd === cwd);
+    const r = await post("/api/spawn/favorite", { cwd, favorite: !currently });
+    if (r.ok) { toast(currently ? "☆ Unfavorited " + cwd : "⭐ Favorited " + cwd); refresh(); renderSpawnModal(); }
+    else toast("❌ " + (r.error || "failed"), true);
+  });
+  const crumbsRow = el("div"); crumbsRow.style.display = "flex"; crumbsRow.style.alignItems = "center"; crumbsRow.style.gap = "8px"; crumbsRow.style.marginTop = "4px";
+  crumbsRow.appendChild(crumbs); crumbsRow.appendChild(starBtn);
+  card.appendChild(crumbsRow);
   const manualWrap = el("div"); manualWrap.style.marginTop = "6px";
   const manualIn = el("input"); manualIn.placeholder = "…or type an absolute path"; manualIn.value = spawnUi.manualMode ? spawnUi.path : "";
   manualIn.addEventListener("change", () => { if (manualIn.value.trim()) { spawnUi.manualMode = true; spawnLs(manualIn.value.trim()); } });

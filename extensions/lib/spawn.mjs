@@ -38,7 +38,13 @@ const SPAWN_REGISTER_TIMEOUT_MS = parseInt(process.env.PI_MAIL_SPAWN_TIMEOUT || 
 let spawnRegistry = {
   /** @type {Record<string, { cwd: string, model?: string, kickoff?: string, spawnedAt: number, agentName?: string, agentId?: string }>} */
   sessions: {},
+  /** Recently-spawned project dirs (history) + starred dirs (favorites),
+   *  shared across the federation and persisted alongside the sessions. */
+  projects: { history: [], favorites: [] },
 };
+
+/** Cap on how many recent projects we keep in history. */
+const PROJECT_HISTORY_MAX = 50;
 
 let spawnPersistTimer = null;
 function schedulePersistSpawn() {
@@ -65,6 +71,10 @@ function loadSpawn() {
     const saved = JSON.parse(fs.readFileSync(SPAWN_FILE, "utf8"));
     if (saved && typeof saved === "object") {
       if (saved.sessions && typeof saved.sessions === "object") spawnRegistry.sessions = saved.sessions;
+    if (saved.projects && typeof saved.projects === "object") {
+      if (Array.isArray(saved.projects.history)) spawnRegistry.projects.history = saved.projects.history;
+      if (Array.isArray(saved.projects.favorites)) spawnRegistry.projects.favorites = saved.projects.favorites;
+    }
     }
   } catch {
     // No spawn file yet — defaults apply.
@@ -122,7 +132,7 @@ function tmuxSessionExists(name) {
  * Spawn a fresh pi agent in a tmux session.
  * @returns {{ ok?: true, name?: string, agentId?: string, warning?: string, error?: string }}
  */
-function spawnAgent({ cwd, name, model, kickoff }) {
+function spawnAgent({ cwd, name, model, kickoff, favorite }) {
   const v = validateSpawnCwd(cwd);
   if (v.error) return { error: v.error };
   const dir = v.resolved;
@@ -163,6 +173,10 @@ function spawnAgent({ cwd, name, model, kickoff }) {
     spawnedAt: Date.now(),
     agentName: session,
   };
+  // Track the project dir in recent history (shared across the federation)
+  // and optionally star it as a favorite.
+  recordProject(dir, session);
+  if (favorite) setFavorite(dir, true);
   schedulePersistSpawn();
   log(`Spawned agent '${session}' in ${dir}`);
 
@@ -234,6 +248,56 @@ function waitForRegistration(name, timeoutMs) {
   });
 }
 
+// ── Project history + favorites ─────────────────────────────────────────────
+
+/** Is there at least one live daemon-spawned session currently running in
+ *  `cwd`? Lets the list-projects tool / UI mark a project as “active”. */
+function cwdAlive(cwd) {
+  return Object.entries(spawnRegistry.sessions).some(
+    ([name, s]) => s.cwd === cwd && tmuxSessionExists(name)
+  );
+}
+
+/** Record a spawn into the recent-projects history (deduped, newest first,
+ *  capped at PROJECT_HISTORY_MAX). Called on every successful spawn. */
+function recordProject(cwd, name) {
+  if (!cwd) return;
+  const p = spawnRegistry.projects;
+  const existing = p.history.find((h) => h.cwd === cwd);
+  const count = (existing?.count || 0) + 1;
+  p.history = p.history.filter((h) => h.cwd !== cwd);
+  p.history.unshift({
+    cwd,
+    lastSpawnedAt: Date.now(),
+    count,
+    lastName: name || existing?.lastName || "",
+  });
+  if (p.history.length > PROJECT_HISTORY_MAX) p.history.length = PROJECT_HISTORY_MAX;
+  schedulePersistSpawn();
+}
+
+/** Explicitly set whether a project dir is a favorite (add/remove). Returns
+ *  the new favorite state. */
+function setFavorite(cwd, favorite) {
+  if (!cwd) return false;
+  const p = spawnRegistry.projects;
+  const i = p.favorites.indexOf(cwd);
+  if (favorite) { if (i === -1) p.favorites.push(cwd); }
+  else { if (i !== -1) p.favorites.splice(i, 1); }
+  schedulePersistSpawn();
+  return p.favorites.includes(cwd);
+}
+
+/** Projects for the UI/tools: favorites + recent history, each tagged with
+ *  whether a live spawned agent is currently running in that dir. */
+function projectsState() {
+  const p = spawnRegistry.projects;
+  return {
+    favorites: p.favorites.map((cwd) => ({ cwd, alive: cwdAlive(cwd) })),
+    history: p.history.map((h) => ({ ...h, alive: cwdAlive(h.cwd) })),
+  };
+}
+
 /** Directory listing for the picker: subdirectories of `dir` (any path on the
  *  filesystem). validateSpawnCwd only checks it's a real directory. When
  *  `hidden` is true, dot-directories (e.g. .git, .config) are included too. */
@@ -253,7 +317,8 @@ function listSpawnDir(dir, { hidden = false } = {}) {
   }
 }
 
-/** Spawned sessions, for the UI/tools: name + cwd + model + live status. */
+/** Spawned sessions, for the UI/tools: name + cwd + model + live status, plus
+ *  the recent/favorite projects registry. */
 function spawnState() {
   const sessions = Object.entries(spawnRegistry.sessions).map(([name, s]) => ({
     name,
@@ -264,7 +329,7 @@ function spawnState() {
     agentName: s.agentName || name,
     alive: tmuxSessionExists(name),
   }));
-  return { sessions };
+  return { sessions, projects: projectsState() };
 }
 
 export {
@@ -277,4 +342,7 @@ export {
   spawnRegistry,
   safeSessionName,
   tmuxSessionExists,
+  recordProject,
+  setFavorite,
+  projectsState,
 };

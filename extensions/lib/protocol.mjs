@@ -28,6 +28,8 @@ import {
   stopAgent,
   spawnState,
   listSpawnDir,
+  setFavorite,
+  projectsState,
 } from "./spawn.mjs";
 import os from "node:os";
 
@@ -244,7 +246,7 @@ export function handleMessage(agentId, msg, socket) {
 
     // ── Agent spawn (orchestrator tools) ────────────────────────────────────
     case "spawn": {
-      const r = spawnAgent({ cwd: msg.cwd, name: msg.name, model: msg.model, kickoff: msg.kickoff });
+      const r = spawnAgent({ cwd: msg.cwd, name: msg.name, model: msg.model, kickoff: msg.kickoff, favorite: msg.favorite });
       reply(r.error ? { type: "error", message: r.error } : { type: "spawned", name: r.name });
       break;
     }
@@ -255,6 +257,17 @@ export function handleMessage(agentId, msg, socket) {
     }
     case "spawn_state": {
       reply({ type: "spawn", ...spawnState() });
+      break;
+    }
+    // List recent + favorite project dirs (the spawn-agent "history/favorites").
+    case "spawn_projects": {
+      reply({ type: "spawn_projects", ...projectsState() });
+      break;
+    }
+    // Star/unstar a project dir as a favorite. `favorite` is a boolean.
+    case "spawn_favorite": {
+      const nowFav = setFavorite(msg.cwd, !!msg.favorite);
+      reply({ type: "ok", favorite: nowFav, ...projectsState() });
       break;
     }
     case "spawn_ls": {

@@ -356,6 +356,28 @@ and reconciled against live tmux on each daemon start, so a
 `/restart-mail-daemon` keeps tracking (and can still stop) previously-spawned
 agents.
 
+### Recent projects + favorites
+
+The daemon also remembers the project directories you spawn into, so you don't
+have to browse the filesystem every time. Two lists are tracked, shared across
+the federation and persisted in the same `mail-spawn.json`:
+
+- **Recent projects (history):** every dir you spawn an agent into is recorded
+  (deduped, newest-first, with a spawn count + last session name), capped at 50.
+- **Favorites:** dirs you've starred show at the top.
+
+Each entry is tagged with whether a spawned agent is currently running in it.
+
+- **`mail_list_projects`** — lists favorites + recent project dirs (use it to
+  pick a `cwd` for `mail_spawn_agent`).
+- **`mail_set_project_favorite({ cwd, favorite })`** — star/unstar a dir.
+- `mail_spawn_agent` also takes an optional `favorite: true` to star the dir at
+  spawn time.
+- In the **board UI spawn picker**, recent/favorite project chips appear at the
+  top (favorites starred, a 🟢 dot when a live agent is running in that dir);
+  a **☆ favorite / ★ favorited** toggle next to the path crumbs stars the
+  current dir.
+
 ## Setup
 
 This is a pi package that bundles the extension **and** the `mail-orchestrator`
@@ -393,8 +415,10 @@ needed.
 | `mail_set_name <name>` | Set your display name |
 | `mail_set_status <status>` | Set your status line (empty string clears it) |
 | `mail_restart_daemon` | Restart the shared mail daemon (briefly disconnects every agent; auto-reconnects) |
-| `mail_spawn_agent { cwd, name?, model?, kickoff? }` | Spawn a fresh pi agent in a directory (tmux); returns its name |
+| `mail_spawn_agent { cwd, name?, model?, kickoff?, favorite? }` | Spawn a fresh pi agent in a directory (tmux); returns its name. `favorite:true` stars the dir |
 | `mail_stop_agent { name }` | Stop a daemon-spawned agent (kills its tmux session) |
+| `mail_list_projects` | List recent + favorite project dirs (history + starred), each tagged alive/not |
+| `mail_set_project_favorite { cwd, favorite }` | Star/unstar a project dir (shared federation-wide) |
 | `board_list_tasks` | Task board overview grouped by column (`mine: true` filters to you) |
 | `board_get_task <id>` | Full task detail: description, column instructions, subtasks, activity |
 | `board_move_task` | Move a task to a column (Jira transition if mapped; notifies assignee) |
