@@ -323,6 +323,7 @@ const DEFAULT_COLUMNS = [
  *             location: "board" | "backlog" | "archive",
  *             level: "epic" | "story" | "task" | "subtask",
  *             epicId?: string | null,
+ *             group?: string | null,
  *             activity: Array<{ ts: number, who: string, text: string, kind?: string }> }} BoardTask
  *
  * parentId/parentKey — subtask linkage (board id and Jira key of the parent).
@@ -344,6 +345,11 @@ const DEFAULT_COLUMNS = [
  *         Local-only metadata (Jira issueType is synced separately as-is).
  * epicId — board id of the epic a story belongs to (optional; epics/stories
  *          are a local hierarchy layer, not a Jira epic-link).
+ * group — the project group that owns this task (e.g. "reader",
+ *         "secondbrain"). Snapshot stamped at create (creator's group) and
+ *         re-stamped on assignment (assignee's group). When unset, derived
+ *         live from the assignee's cwd basename. Drives same-group-only
+ *         visibility for agents; the human operator sees every group.
  */
 let board = {
   config: {
@@ -403,6 +409,8 @@ function loadBoard() {
         if (!t.location) t.location = "board";
         if (!t.level) t.level = t.parentId || t.parentKey ? "subtask" : "task";
         if (t.epicId === undefined) t.epicId = null;
+        // group is left as-is when stamped; unset tasks derive it live from
+        // their assignee (see taskGroup), so no backfill needed.
       }
     }
   } catch {
@@ -461,13 +469,63 @@ function progressEntriesSince(task) {
   return (task.activity ?? []).filter((a) => (a.kind ?? "comment") === "progress" && a.ts >= since);
 }
 
-function boardState() {
+// ── Project grouping ────────────────────────────────────────────────────────
+//
+// Tasks are partitioned by "group" — the project group (cwd basename, e.g.
+// "reader", "secondbrain") that owns them. An agent only sees/moves tasks in
+// its own group; the human operator sees every group. The group is stamped on
+// a task at create (the creator's group) and re-stamped on assignment (the
+// assignee's group); when no stamp is present it is derived live from the
+// assignee's cwd basename. Tasks with neither a stamp nor an assignable
+// assignee have group null and are visible to everyone (so nothing historical
+// gets hidden).
+
+/** Project group (cwd basename) for a registered agent id. */
+function agentGroup(agentId) {
+  if (agentId === HUMAN_AGENT_ID) return null;
+  const cwd = agents.get(agentId)?.info.cwd;
+  if (!cwd) return null;
+  return path.basename(cwd) || cwd;
+}
+
+/** Resolve an assignee name (as stored on a task) back to a live agent id,
+ *  then to its project group. Returns null when unresolvable. */
+function groupForName(name) {
+  if (!name) return null;
+  const id = resolveTarget(name);
+  return id ? agentGroup(id) : null;
+}
+
+/** The effective group a task belongs to: stamped group, else derived live
+ *  from the assignee's project, else null (visible to all). */
+function taskGroup(task) {
+  if (task.group) return task.group;
+  return groupForName(task.assignee);
+}
+
+/** Whether actor agentId may see/modify task (same group; human sees all;
+ *  ungrouped tasks are visible to all). */
+function canAccessGroup(actorId, task) {
+  if (actorId === HUMAN_AGENT_ID) return true;
+  const g = taskGroup(task);
+  if (!g) return true;
+  return g === agentGroup(actorId);
+}
+
+function boardState(actorId) {
+  // Agents only see their own group's tasks; the human operator sees all.
+  // Ungrouped tasks (no stamped group and no derivable assignee group) are
+  // shown to everyone so historical data isn't hidden.
+  const tasks = actorId && actorId !== HUMAN_AGENT_ID
+    ? board.tasks.filter((t) => canAccessGroup(actorId, t))
+    : board.tasks;
   return {
     columns: board.columns,
-    tasks: board.tasks,
+    tasks,
     jiraConfigured: !!jiraCfg(),
     lastSync: board.lastSync,
     syncError: board.syncError,
+    myGroup: agentGroup(actorId) ?? null,
   };
 }
 
@@ -866,6 +924,7 @@ async function syncBoard(reason = "interval") {
 async function boardMove(actorId, taskSpec, columnSpec, note) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  if (!canAccessGroup(actorId, task)) return { error: `Task '${taskSpec}' is in a different group's board` };
   const actor = agentDisplayName(actorId);
   const target = String(columnSpec ?? "").trim().toLowerCase();
 
@@ -960,17 +1019,32 @@ function boardAssign(actorId, taskSpec, assignee, newSession) {
   if (!task) return { error: `Task '${taskSpec}' not found` };
   const actor = agentDisplayName(actorId);
   const name = String(assignee ?? "").trim();
+  // Same-group visibility: an agent may only touch tasks in its own group.
+  // (The human operator can assign anything.)
+  if (!canAccessGroup(actorId, task)) {
+    return { error: `Task '${taskSpec}' is in a different group's board` };
+  }
   if (!name) {
     const prev = task.assignee;
     task.assignee = null;
+    // When unassigned, fall back to the stamped group (creator's); keep the
+    // existing stamp so the task stays on its board rather than vanishing.
     taskActivity(task, actor, prev ? `unassigned ${prev}` : "cleared assignee");
     schedulePersistBoard();
     return { ok: true, task };
   }
   // Resolve to a canonical live-agent name when possible (accepts id prefixes).
   const targetId = resolveTarget(name);
+  // An agent can only assign within its own group; the human can assign across.
+  const newGroup = targetId ? agentGroup(targetId) : null;
+  if (actorId !== HUMAN_AGENT_ID && newGroup != null && newGroup !== agentGroup(actorId)) {
+    return { error: `Cannot assign to ${name}: ${name} is in a different project group` };
+  }
   const prevAssignee = task.assignee;
   task.assignee = targetId ? agentDisplayName(targetId) : name;
+  // Re-stamp the owning group from the new assignee's project (human-assigned
+  // tasks land on that agent's board; unresolvable names keep the prior stamp).
+  if (newGroup != null) task.group = newGroup;
   // Reassigning to a DIFFERENT agent: the new assignee has no context for this
   // task, so clear their session (deliver as a new-session task). First
   // assignment keeps the caller's newSession choice; re-assigning the same
@@ -999,6 +1073,7 @@ function boardAssign(actorId, taskSpec, assignee, newSession) {
 async function boardComment(actorId, taskSpec, text) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  if (!canAccessGroup(actorId, task)) return { error: `Task '${taskSpec}' is in a different group's board` };
   const body = String(text ?? "").trim();
   if (!body) return { error: "Comment text is empty" };
   const actor = agentDisplayName(actorId);
@@ -1052,6 +1127,7 @@ async function boardComment(actorId, taskSpec, text) {
 async function boardProgress(actorId, taskSpec, text) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  if (!canAccessGroup(actorId, task)) return { error: `Task '${taskSpec}' is in a different group's board` };
   const body = String(text ?? "").trim();
   if (!body) return { error: "Progress text is empty" };
   const actor = agentDisplayName(actorId);
@@ -1113,6 +1189,10 @@ async function boardCreate(actorId, { summary, description, column, parent, inJi
     location: toBacklog ? "backlog" : "board",
     level: finalLevel,
     epicId: epicRef,
+    // Stamp the owning group: subtasks inherit their parent's group, otherwise
+    // the creator's project group (human-created tasks get null here and are
+    // (re)stamped when assigned to an agent).
+    group: parentTask ? taskGroup(parentTask) : agentGroup(actorId),
     activity: [
       {
         ts: Date.now(),
@@ -1159,6 +1239,7 @@ async function boardCreate(actorId, { summary, description, column, parent, inJi
 async function boardUpdate(actorId, taskSpec, { summary, description } = {}) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  if (!canAccessGroup(actorId, task)) return { error: `Task '${taskSpec}' is in a different group's board` };
   const actor = agentDisplayName(actorId);
   const changes = [];
   if (typeof summary === "string" && summary.trim()) {
@@ -1191,6 +1272,7 @@ async function boardUpdate(actorId, taskSpec, { summary, description } = {}) {
 function boardFlag(actorId, taskSpec, reason, clear) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
+  if (!canAccessGroup(actorId, task)) return { error: `Task '${taskSpec}' is in a different group's board` };
   const actor = agentDisplayName(actorId);
   if (clear) {
     task.flagged = null;
@@ -1472,7 +1554,7 @@ function handleMessage(agentId, msg, socket) {
     // ── Task board ──────────────────────────────────────────────────────────
 
     case "board_state": {
-      reply({ type: "board", ...boardState() });
+      reply({ type: "board", ...boardState(agentId) });
       break;
     }
 
@@ -1547,18 +1629,9 @@ function handleMessage(agentId, msg, socket) {
       reply({ type: "spawn", ...spawnState() });
       break;
     }
-    case "spawn_roots": {
-      reply({ type: "spawn_roots", roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] });
-      break;
-    }
     case "spawn_ls": {
       const r = listSpawnDir(msg.path || os.homedir());
       reply(r.error ? { type: "error", message: r.error } : { type: "spawn_ls", dir: r.dir, dirs: r.dirs });
-      break;
-    }
-    case "spawn_set_roots": {
-      const r = setSpawnRoots(msg.roots);
-      reply(r.error ? { type: "error", message: r.error } : { type: "spawn_roots", roots: r.roots });
       break;
     }
 
@@ -1594,15 +1667,10 @@ try {
  * only ever stops sessions listed here, so an operator-launched tmux/pi is
  * never killed by stop(). Survives daemon restarts so /restart-mail-daemon
  * keeps tracking (and can still stop) previously-spawned agents.
- *
- * `roots` is the operator-configured allowlist of directories the picker may
- * browse (in addition to $HOME). Pragmatic, not a security boundary.
  */
 let spawnRegistry = {
   /** @type {Record<string, { cwd: string, model?: string, kickoff?: string, spawnedAt: number, agentName?: string }>} */
   sessions: {},
-  /** @type {string[]} */
-  roots: [],
 };
 
 let spawnPersistTimer = null;
@@ -1625,7 +1693,6 @@ function loadSpawn() {
     const saved = JSON.parse(fs.readFileSync(SPAWN_FILE, "utf8"));
     if (saved && typeof saved === "object") {
       if (saved.sessions && typeof saved.sessions === "object") spawnRegistry.sessions = saved.sessions;
-      if (Array.isArray(saved.roots)) spawnRegistry.roots = saved.roots.filter((r) => typeof r === "string");
     }
   } catch {
     // No spawn file yet — defaults apply.
@@ -1638,20 +1705,9 @@ function loadSpawn() {
   }
 }
 
-/** Default allowlist: $HOME plus any PI_MAIL_SPAWN_ROOTS (colon-separated). */
-function defaultRoots() {
-  const roots = [os.homedir()];
-  const extra = (process.env.PI_MAIL_SPAWN_ROOTS || "").split(":").map((s) => s.trim()).filter(Boolean);
-  for (const r of extra) roots.push(r);
-  return [...new Set(roots)];
-}
-
-/** All roots the picker may browse: ui-configured + env defaults. */
-function spawnRoots() {
-  return [...new Set([...(spawnRegistry.roots || []), ...defaultRoots()])];
-}
-
-/** Resolve and validate a cwd: must be a real directory under an allowed root. */
+/** Resolve and validate a cwd: must be a real directory anywhere on the
+ *  filesystem. The picker can browse and spawn from any path — there is no
+ *  allowlist (the former "allowed root" restriction was removed). */
 function validateSpawnCwd(cwd) {
   if (!cwd || typeof cwd !== "string") return { error: "cwd is required" };
   let resolved;
@@ -1667,13 +1723,6 @@ function validateSpawnCwd(cwd) {
     return { error: `not a directory: ${resolved}` };
   }
   if (!st.isDirectory()) return { error: `not a directory: ${resolved}` };
-  const roots = spawnRoots().map((r) => {
-    try { return path.resolve(r); } catch { return r; }
-  });
-  const under = roots.some((r) => resolved === r || resolved.startsWith(r + path.sep));
-  if (!under) {
-    return { error: `${resolved} is outside the allowed roots. Add it to the spawn roots (UI settings or PI_MAIL_SPAWN_ROOTS).` };
-  }
   return { resolved };
 }
 
@@ -1813,11 +1862,10 @@ function waitForRegistration(name, timeoutMs) {
   });
 }
 
-/** Directory listing for the picker: entries under `dir` if allowed. */
+/** Directory listing for the picker: subdirectories of `dir` (any path on the
+ *  filesystem). validateSpawnCwd only checks it's a real directory. */
 function listSpawnDir(dir) {
   const v = validateSpawnCwd(dir);
-  // Allow listing a root itself even when it's the root (validateSpawnCwd
-  // already accepts roots). If invalid, surface the error.
   if (v.error) return { error: v.error };
   const resolved = v.resolved;
   try {
@@ -1843,15 +1891,7 @@ function spawnState() {
     agentName: s.agentName || name,
     alive: tmuxSessionExists(name),
   }));
-  return { sessions, roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] };
-}
-
-/** Update the operator-configured roots allowlist. */
-function setSpawnRoots(roots) {
-  if (!Array.isArray(roots)) return { error: "roots must be an array of strings" };
-  spawnRegistry.roots = roots.map((r) => String(r).trim()).filter(Boolean);
-  schedulePersistSpawn();
-  return { ok: true, roots: spawnRoots() };
+  return { sessions };
 }
 
 // Minimal sync helpers (used for tmux probes / spawn). spawnSync is imported
@@ -1944,7 +1984,7 @@ const httpServer = http.createServer(async (req, res) => {
     // ── Task board endpoints (actor: the human operator) ────────────────────
 
     if (req.method === "GET" && url.pathname === "/api/board") {
-      json(res, 200, boardState());
+      json(res, 200, boardState(HUMAN_AGENT_ID));
       return;
     }
 
@@ -2036,18 +2076,6 @@ const httpServer = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/spawn") {
       json(res, 200, spawnState());
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/spawn/roots") {
-      json(res, 200, { roots: spawnRoots(), configuredRoots: spawnRegistry.roots || [] });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/spawn/roots") {
-      const body = await readJsonBody(req);
-      const r = setSpawnRoots(body.roots);
-      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, roots: r.roots });
       return;
     }
 

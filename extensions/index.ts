@@ -1447,6 +1447,8 @@ export default function (pi: ExtensionAPI) {
     level?: "epic" | "story" | "task" | "subtask";
     /** Board id of the epic a story belongs to (optional). */
     epicId?: string | null;
+    /** Project group that owns this task (cwd basename, e.g. "reader"). */
+    group?: string | null;
     activity: Array<{ ts: number; who: string; text: string; kind?: string }>;
   }
 
@@ -1457,6 +1459,8 @@ export default function (pi: ExtensionAPI) {
     jiraConfigured?: boolean;
     lastSync?: number;
     syncError?: string | null;
+    /** The caller's own project group (null for the human operator). */
+    myGroup?: string | null;
     message?: string;
   }
 
@@ -1480,7 +1484,8 @@ export default function (pi: ExtensionAPI) {
     const flag = t.flagged ? ` ⚠unclear` : "";
     const lvl = t.level && t.level !== "task" ? ` ${t.level}` : "";
     const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : "";
-    return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${flag}`;
+    const grp = t.group ? ` ⟨${t.group}⟩` : "";
+    return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${grp}${flag}`;
   }
 
   /** Result formatting shared by board mutation tools. */
@@ -1558,8 +1563,9 @@ export default function (pi: ExtensionAPI) {
             ? `⚠️ Jira sync error: ${b.syncError}`
             : `Jira sync: last ${b.lastSync ? new Date(b.lastSync).toLocaleString() : "never"}`
           : "Jira: not configured (board-only mode)";
+        const scope = b.myGroup ? ` · group: ${b.myGroup} (same-group view)` : " · all groups (operator view)";
         return {
-          content: [{ type: "text", text: `📋 Task board — ${tasks.length} task(s)\n${sync}\n\n${lines.join("\n")}` }],
+          content: [{ type: "text", text: `📋 Task board — ${tasks.length} task(s)\n${sync}${scope}\n\n${lines.join("\n")}` }],
           details: { columns: b.columns, tasks },
         };
       } catch (err: unknown) {
@@ -1594,6 +1600,7 @@ export default function (pi: ExtensionAPI) {
           `Location: ${locLabel}${loc === "board" ? (col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)") : " (off-board)"}`,
           `Level:    ${t.level ?? "task"}${epic ? ` · epic: ${epic.key ?? epic.id.slice(0, 8)} — ${epic.summary}` : ""}`,
           `Assignee: ${t.assignee ?? "—"}`,
+          `Group:    ${t.group ?? "—"}${t.assignee ? "" : " (none — visible to all groups)"}`,
           `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
           ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
           ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
@@ -1902,14 +1909,14 @@ export default function (pi: ExtensionAPI) {
     name: "mail_spawn_agent",
     label: "Mail: Spawn Agent",
     description:
-      "Spawn a fresh, long-running pi agent in a chosen working directory (a new worker for that project). The agent runs in a detached tmux session and registers with the federation within a few seconds; you can then assign it board tasks or mail it (newSession:true) to give it work. Returns the new agent's name. The cwd must be under an allowed root ($HOME by default, plus any configured roots). Use this to scale out orchestration to a new project directory instead of messaging an already-running agent.",
+      "Spawn a fresh, long-running pi agent in a chosen working directory (a new worker for that project). The agent runs in a detached tmux session and registers with the federation within a few seconds; you can then assign it board tasks or mail it (newSession:true) to give it work. Returns the new agent's name. The cwd may be any directory on the filesystem (no allowlist). Use this to scale out orchestration to a new project directory instead of messaging an already-running agent.",
     promptSnippet: "Spawn a fresh pi agent in a directory",
     promptGuidelines: [
       "Use mail_spawn_agent to bring up a new worker in a project dir, then board_assign_task / mail_send(newSession:true) to give it work.",
       "The agent name defaults to <dir-basename>-<id6>; pass a name only if you need a specific one (tmux session name, no '.' or ':').",
     ],
     parameters: Type.Object({
-      cwd: Type.String({ description: "Absolute working directory for the new agent (must be under an allowed root)" }),
+      cwd: Type.String({ description: "Absolute working directory for the new agent (any directory on the filesystem)" }),
       name: Type.Optional(Type.String({ description: "Optional agent/session name (defaults to <dir-basename>-<id6>)" })),
       model: Type.Optional(Type.String({ description: "Optional model, e.g. 'anthropic/claude-sonnet-4' (defaults to pi's default)" })),
       kickoff: Type.Optional(Type.String({ description: "Optional kickoff prompt; delivered to the new agent as a new-session task once it registers" })),
