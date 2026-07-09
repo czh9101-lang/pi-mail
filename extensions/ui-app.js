@@ -82,6 +82,9 @@ function renderBoard() {
   const nt = el("div", "newtask");
   const inSum = el("input"); inSum.placeholder = "New task summary…"; inSum.value = boardUi.newTask.summary;
   inSum.addEventListener("input", () => boardUi.newTask.summary = inSum.value);
+  const inDesc = el("textarea"); inDesc.placeholder = "Description (optional)…"; inDesc.value = boardUi.newTask.description;
+  inDesc.addEventListener("input", () => boardUi.newTask.description = inDesc.value);
+  inDesc.rows = 2; inDesc.style.minHeight = "40px";
   const colPick = el("select", "agentpick");
   for (const c of board.columns) {
     const o = el("option"); o.value = c.id; o.textContent = c.name;
@@ -107,10 +110,12 @@ function renderBoard() {
     if (!summary) { toast("Give the task a summary", true); return; }
     const payload = { summary, level: boardUi.newTask.level, backlog: boardUi.newTask.backlog };
     if (!boardUi.newTask.backlog) payload.column = colPick.value;
+    const desc = boardUi.newTask.description.trim();
+    if (desc) payload.description = desc;
     const r = await boardPost("/api/board/create", payload, "Task created");
-    if (r.ok) { boardUi.newTask.summary = ""; inSum.value = ""; }
+    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; inSum.value = ""; inDesc.value = ""; }
   });
-  nt.appendChild(inSum); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
+  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
 
   // Backlog pool — sits ABOVE the board columns. Items here are not yet
@@ -126,6 +131,7 @@ function renderBoard() {
     bl.appendChild(el("div", "binstr", "Items not yet placed on a board column. Use the card's move dropdown to place one onto a column (it then leaves the backlog)."));
     if (!backlogTasks.length) bl.appendChild(el("div", "empty", "—"));
     for (const t of backlogTasks) bl.appendChild(taskCard(t, board));
+    makeDropTarget(bl, "backlog");
     main.appendChild(bl);
   }
 
@@ -142,6 +148,7 @@ function renderBoard() {
     if (c.instructions) col.appendChild(el("div", "binstr", c.instructions));
     if (!tasks.length) col.appendChild(el("div", "empty", "—"));
     for (const t of tasks) col.appendChild(taskCard(t, board));
+    makeDropTarget(col, c.id);
     kb.appendChild(col);
   }
   main.appendChild(kb);
@@ -159,6 +166,7 @@ function renderBoard() {
     ar.appendChild(arHead);
     if (!archTasks.length) ar.appendChild(el("div", "empty", "—"));
     for (const t of archTasks) ar.appendChild(taskCard(t, board));
+    makeDropTarget(ar, "archive");
     main.appendChild(ar);
   }
 

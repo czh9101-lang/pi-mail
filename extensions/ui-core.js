@@ -10,11 +10,12 @@ let boardUi = {
   taskModalId: null,            // task whose detail modal is open
   settingsOpen: false,
   freshSession: true,           // newSession flag used when assigning
-  newTask: { summary: "", column: "", level: "task", backlog: false },
+  newTask: { summary: "", description: "", column: "", level: "task", backlog: false },
   draftComments: {},            // taskId -> comment draft
   colsDraft: null,              // unsaved column edits while settings are open
   showArchive: false,           // status filter: show done (archived) tasks
   groupFilter: "__all",         // "__all" = every group, else a project group
+  dragTaskId: null,            // task id being dragged (DnD); suppresses poll re-render
 };
 let pollTimer = null;
 let lastSig = null;
@@ -106,8 +107,11 @@ async function refresh() {
     // reset scroll every tick.
     const taskModal = document.getElementById("task-modal");
     const focusedInModal = !!taskModal && document.activeElement && taskModal.contains(document.activeElement);
+    // Suppress the poll re-render while a card drag is in progress so the
+    // dragged element and drop-target highlights aren't rebuilt mid-drag.
+    const dragging = !!boardUi.dragTaskId;
     const sig = JSON.stringify([state.agents, state.messages, state.board]);
-    if (focusedInMain || focusedInModal) { lastSig = sig; return; }
+    if (focusedInMain || focusedInModal || dragging) { lastSig = sig; return; }
     if (sig !== lastSig) { lastSig = sig; render(); }
   } catch (e) {
     $("#status").innerHTML = "";
