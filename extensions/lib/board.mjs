@@ -300,15 +300,27 @@ export function canAccessGroup(actorId, task) {
 }
 
 export function boardState(actorId, opts = {}) {
-  // Agents only see their own group's tasks; the human operator sees all.
-  // Manager agents (injected predicate) also see all groups — they oversee
-  // multiple projects in a single pass.
+  // Group filter (task b59e930a): an explicit `group` param overrides the
+  // default same-group scoping so the CEO/MM (or any caller) can list tasks
+  // across every project's board in a single call, or for one specific group,
+  // without spawning an MM per project. `group: "all"` returns every task;
+  // `group: "<name>"` returns only that group's tasks. When omitted, the
+  // default applies: agents see their own group only; the human operator and
+  // manager agents (injected predicate) see all groups.
   // Ungrouped tasks (no stamped group and no derivable assignee group) are
   // shown to everyone so historical data isn't hidden.
-  const seesAll = !actorId || actorId === HUMAN_AGENT_ID || (managerAgentTest && managerAgentTest(actorId));
-  let tasks = seesAll
-    ? board.tasks
-    : board.tasks.filter((t) => canAccessGroup(actorId, t));
+  const groupFilter = opts.group;
+  let tasks;
+  if (groupFilter === "all") {
+    tasks = board.tasks;
+  } else if (groupFilter) {
+    tasks = board.tasks.filter((t) => taskGroup(t) === groupFilter);
+  } else {
+    const seesAll = !actorId || actorId === HUMAN_AGENT_ID || (managerAgentTest && managerAgentTest(actorId));
+    tasks = seesAll
+      ? board.tasks
+      : board.tasks.filter((t) => canAccessGroup(actorId, t));
+  }
   // Location/archive filter (task 6586b9ca) — single source of truth for the
   // board_list_tasks default: archived tasks are hidden unless explicitly
   // requested, and `location` filters to one pool ('board'|'backlog'|'archive').
@@ -332,6 +344,9 @@ export function boardState(actorId, opts = {}) {
     lastSync: board.lastSync,
     syncError: board.syncError,
     myGroup: agentGroup(actorId) ?? null,
+    /** The group filter actually applied (task b59e930a): "all", a specific
+     *  group name, or null (default same-group/operator scoping). */
+    group: groupFilter ?? null,
   };
 }
 

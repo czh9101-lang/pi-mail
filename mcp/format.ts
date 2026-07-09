@@ -31,23 +31,39 @@ export interface BoardListFilters {
   level?: string;
   /** Include archived tasks (location='archive') in the listing. */
   includeArchived?: boolean;
+  /** Scope by project group: 'all' = every project's tasks (cross-group), or a
+   *  specific group name. Omit for the default scoping. */
+  group?: string;
 }
 
 /** Render the whole board grouped by location/column (board_list_tasks). */
 export function renderBoard(b: BoardState, filters: BoardListFilters = {}): string {
-  const { mineAssignee, location: wantLoc, level, includeArchived } = filters;
+  const { mineAssignee, location: wantLoc, level, includeArchived, group } = filters;
   let tasks = b.tasks ?? [];
   if (mineAssignee) tasks = tasks.filter((t) => t.assignee === mineAssignee);
   if (level) tasks = tasks.filter((t) => (t.level ?? "task") === level);
   const showArchive = !!includeArchived || wantLoc === "archive";
-  // NOTE: location/archive FILTERING is done server-side by boardState (task
-  // 6586b9ca, via getBoard(opts)); `b.tasks` arrives already filtered. The
-  // `wantLoc`/`showArchive` flags here only control which SECTIONS to render.
+  // NOTE: location/archive/group FILTERING is done server-side by boardState (task
+  // 6586b9ca / b59e930a, via getBoard(opts)); `b.tasks` arrives already filtered.
+  // The `wantLoc`/`showArchive` flags here only control which SECTIONS to render.
+  // The group scope label is derived from the explicit `group` filter, else the
+  // server's own group / myGroup (task b59e930a fixes the misleading "same-group
+  // view" label managers used to see).
+  const scopeLabel = group === "all"
+    ? "all groups"
+    : group
+      ? `group: ${group}`
+      : b.group
+        ? (b.group === "all" ? "all groups" : `group: ${b.group}`)
+        : b.myGroup
+          ? `group: ${b.myGroup} (same-group view)`
+          : "all groups (operator view)";
   if (tasks.length === 0) {
-    return mineAssignee ? `No tasks assigned to ${mineAssignee}.` : "Board is empty.";
+    if (mineAssignee) return `No tasks assigned to ${mineAssignee}.`;
+    return `Board is empty. · ${scopeLabel}`;
   }
   const cols = b.columns ?? [];
-  const lines: string[] = [`📋 Task board — ${tasks.length} task(s)`, ""];
+  const lines: string[] = [`📋 Task board — ${tasks.length} task(s) · ${scopeLabel}`, ""];
   // Backlog pool (sits above the board) — show first in default/board view.
   if (!wantLoc || wantLoc === "backlog") {
     const inBacklog = tasks.filter((t) => (t.location ?? "board") === "backlog");

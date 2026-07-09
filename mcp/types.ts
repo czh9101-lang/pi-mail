@@ -73,9 +73,14 @@ export interface BoardState {
   jiraConfigured: boolean;
   lastSync: number | null;
   syncError: string | null;
+  /** The caller's own project group (cwd basename), or null for the operator. */
+  myGroup?: string | null;
+  /** The group filter actually applied (task b59e930a): "all", a specific
+   *  group name, or null (default same-group/operator scoping). */
+  group?: string | null;
 }
 
-/** Location/archive filter for GET /api/board (task 6586b9ca). When omitted
+/** Location/archive/group filter for GET /api/board (task 6586b9ca / b59e930a). When omitted
  *  entirely the daemon returns the full board (board + backlog + archive).
  *  Pass { includeArchived: false } for the user-facing default (archive hidden). */
 export interface BoardListOpts {
@@ -83,6 +88,10 @@ export interface BoardListOpts {
   location?: string;
   /** Include archived tasks (location='archive') in the listing. */
   includeArchived?: boolean;
+  /** Scope by project group: 'all' = every project's tasks (cross-group), or a
+   *  specific group name. Omit for the default same-group (agent) / all-groups
+   *  (human) scoping. */
+  group?: string;
 }
 
 /** Normalized result from a board mutation HTTP call. */

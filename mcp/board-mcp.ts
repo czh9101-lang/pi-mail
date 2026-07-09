@@ -52,20 +52,21 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
   // ── board_list_tasks ──────────────────────────────────────────────────────
   server.tool(
     "board_list_tasks",
-    "List tasks on the shared pi-mail board, grouped by location/column (Backlog pool, then columns, then Archive when shown). By default archived tasks are hidden; pass includeArchived:true to see them. Use location to filter to 'board'|'backlog'|'archive', and level for 'epic'|'story'|'task'|'subtask'. mine:true shows only tasks assigned to the human agent.",
+    "List tasks on the shared pi-mail board, grouped by location/column (Backlog pool, then columns, then Archive when shown). By default archived tasks are hidden; pass includeArchived:true to see them. Use location to filter to 'board'|'backlog'|'archive', and level for 'epic'|'story'|'task'|'subtask'. mine:true shows only tasks assigned to the human agent. Pass group:'all' for every project's tasks (cross-group), or group:'<name>' for one project's tasks; omit for the default scoping.",
     {
       mine: z.boolean().optional().describe("Only show tasks assigned to the human agent (the MCP operator)"),
       location: z.string().optional().describe("Filter by location: 'board' (on a column), 'backlog', or 'archive'. Omit to see board + backlog (archive hidden unless includeArchived)."),
       level: z.string().optional().describe("Filter to a level: 'epic' | 'story' | 'task' | 'subtask'"),
       includeArchived: z.boolean().optional().describe("Include archived tasks (location='archive') in the listing"),
+      group: z.string().optional().describe("Scope by project group: 'all' = every project's tasks (cross-group), or a specific group name. Omit for the default scoping."),
     },
-    async ({ mine, location, level, includeArchived }) => {
+    async ({ mine, location, level, includeArchived, group }) => {
       try {
-        // Delegate location/archive filtering to the daemon's boardState (task
-        // 6586b9ca) — single source of truth. Default (no params) hides the
-        // archive; backlog + board columns are shown.
-        const b = await http.getBoard({ location, includeArchived: includeArchived ?? false });
-        return ok(renderBoard(b, { mineAssignee: mine ? "human" : null, location, level, includeArchived }));
+        // Delegate location/archive + group filtering to the daemon's boardState
+        // (task 6586b9ca / b59e930a) — single source of truth. Default (no params)
+        // hides the archive; backlog + board columns are shown.
+        const b = await http.getBoard({ location, includeArchived: includeArchived ?? false, group });
+        return ok(renderBoard(b, { mineAssignee: mine ? "human" : null, location, level, includeArchived, group }));
       } catch (e) {
         return toolError(e);
       }

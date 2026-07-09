@@ -8,12 +8,12 @@ import { Type } from "typebox";
 import type { MailClient } from "./mail-client.js";
 interface BoardColumn { id: string; name: string; jiraStatus: string | null; instructions: string; }
 interface BoardTask { id: string; key: string | null; origin: "jira" | "local"; summary: string; description: string; url: string | null; jiraStatus: string | null; columnId: string; assignee: string | null; priority: string | null; issueType: string | null; updatedAt: number; parentId: string | null; parentKey: string | null; pinned?: boolean; flagged: { by: string; reason: string; ts: number } | null; knownCommentIds?: string[]; progressSince?: number; lastProgressTs?: number; lastNudgeTs?: number; location: "board" | "backlog" | "archive"; level: "epic" | "story" | "task" | "subtask"; epicId?: string | null; group?: string | null; activity: Array<{ ts: number; who: string; text: string; kind?: string }>; }
-interface BoardStateResp { type: string; message?: string; columns: BoardColumn[]; tasks: BoardTask[]; jiraConfigured: boolean; lastSync: number; syncError: string | null; myGroup: string | null; }
+interface BoardStateResp { type: string; message?: string; columns: BoardColumn[]; tasks: BoardTask[]; jiraConfigured: boolean; lastSync: number; syncError: string | null; myGroup: string | null; group?: string | null; }
 export interface BoardToolCtx { client: MailClient | null; connected: boolean; agentName: string; notConnected: { content: { type: "text"; text: string }[] }; }
 function errText(err: unknown) { return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }; }
 function taskLine(t: BoardTask): string { const key = t.key ? `${t.key} ` : ""; const who = t.assignee ? ` → ${t.assignee}` : ""; const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : ""; const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : ""; const flag = t.flagged ? ` ⚠unclear` : ""; const lvl = t.level && t.level !== "task" ? ` ${t.level}` : ""; const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : ""; const grp = t.group ? ` ⟨${t.group}⟩` : ""; return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${grp}${flag}`; }
 function boardOpResult(resp: { type: string; warning?: string; message?: string; task?: BoardTask }, okText: string) { if (resp.type === "error") { return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] }; } const warn = resp.warning ? `\n⚠️ ${resp.warning}` : ""; return { content: [{ type: "text" as const, text: `✅ ${okText}${warn}` }], details: { task: resp.task } }; }
-async function fetchBoard(ctx: BoardToolCtx, opts: { location?: string; includeArchived?: boolean } = {}): Promise<BoardStateResp> { if (!ctx.connected || !ctx.client) throw new Error("Not connected to mail daemon"); const resp = await ctx.client.request<BoardStateResp>({ type: "board_state", ...opts }); if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error"); return resp; }
+async function fetchBoard(ctx: BoardToolCtx, opts: { location?: string; includeArchived?: boolean; group?: string } = {}): Promise<BoardStateResp> { if (!ctx.connected || !ctx.client) throw new Error("Not connected to mail daemon"); const resp = await ctx.client.request<BoardStateResp>({ type: "board_state", ...opts }); if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error"); return resp; }
 export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
   pi.registerTool({
     name: "board_list_tasks",
@@ -21,7 +21,8 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
     description:
       "List all tasks on the shared kanban task board, grouped by column, plus the Backlog and Archive pools. " +
       "Shows task id, Jira key, summary, assignee and Jira status. Use 'mine: true' to only see tasks assigned to you. " +
-      "By default archived tasks are hidden; pass includeArchived: true to see them. Pass location to filter to 'board'|'backlog'|'archive'.",
+      "By default archived tasks are hidden; pass includeArchived: true to see them. Pass location to filter to 'board'|'backlog'|'archive'. " +
+      "Pass group to scope the listing: group:'all' shows every project's tasks (cross-group), group:'<name>' shows one project's tasks; omit for your own group (the default for workers).",
     promptSnippet: "List tasks on the shared task board",
     promptGuidelines: [
       "Use board_list_tasks to see sprint/board work, e.g. when asked what to work on or to check task state.",
@@ -33,14 +34,15 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
       })),
       level: Type.Optional(Type.String({ description: "Filter to a level: 'epic' | 'story' | 'task' | 'subtask'" })),
       includeArchived: Type.Optional(Type.Boolean({ description: "Include archived tasks (location='archive') in the listing" })),
+      group: Type.Optional(Type.String({ description: "Scope by project group: 'all' = every project's tasks (cross-group), or a specific group name. Omit for your own group (default for workers)." })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       try {
-        // Delegate location/archive filtering to the daemon's boardState (task
-        // 6586b9ca) — single source of truth. Default (no params) hides the
-        // archive (includeArchived defaults to false); backlog + board columns
-        // are shown. `mine`/`level` stay here (presentation/agent-specific).
-        const b = await fetchBoard(ctx, { location: params.location, includeArchived: params.includeArchived ?? false });
+        // Delegate location/archive + group filtering to the daemon's boardState
+        // (task 6586b9ca / b59e930a) — single source of truth. Default (no params)
+        // hides the archive (includeArchived defaults to false); backlog + board
+        // columns are shown. `mine`/`level` stay here (presentation/agent-specific).
+        const b = await fetchBoard(ctx, { location: params.location, includeArchived: params.includeArchived ?? false, group: params.group });
         let tasks = b.tasks ?? [];
         if (params.mine) tasks = tasks.filter((t) => t.assignee === ctx.agentName);
         if (params.level) tasks = tasks.filter((t) => (t.level ?? "task") === params.level);
@@ -76,7 +78,7 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
             ? `⚠️ Jira sync error: ${b.syncError}`
             : `Jira sync: last ${b.lastSync ? new Date(b.lastSync).toLocaleString() : "never"}`
           : "Jira: not configured (board-only mode)";
-        const scope = b.myGroup ? ` · group: ${b.myGroup} (same-group view)` : " · all groups (operator view)";
+        const scope = params.group === "all" ? " · all groups" : params.group ? ` · group: ${params.group}` : b.myGroup ? ` · group: ${b.myGroup} (same-group view)` : " · all groups (operator view)";
         return {
           content: [{ type: "text", text: `📋 Task board — ${tasks.length} task(s)\n${sync}${scope}\n\n${lines.join("\n")}` }],
           details: { columns: b.columns, tasks },

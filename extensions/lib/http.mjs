@@ -314,10 +314,15 @@ export function createHttpServer({ uiHtml, uiAssets }) {
     if (req.method === "GET" && url.pathname === "/api/board") {
       // Optional location/archive filter (task 6586b9ca): ?location=board|backlog|archive
       // and ?includeArchived=true|false. Omit both for the full board (UI default).
+      // Optional group filter (task b59e930a): ?group=all|<name>. Omit for the
+      // default same-group (agent) / all-groups (human) scoping.
       const location = url.searchParams.get("location") || undefined;
       const incArch = url.searchParams.get("includeArchived");
-      const opts = location || incArch !== null ? { location, includeArchived: incArch === "true" } : {};
-      json(res, 200, boardState(HUMAN_AGENT_ID, opts));
+      const group = url.searchParams.get("group") || undefined;
+      const opts = { location, group, ...(incArch !== null ? { includeArchived: incArch === "true" } : {}) };
+      // Drop undefined keys so the default (no filter) path stays clean.
+      const clean = Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined));
+      json(res, 200, boardState(HUMAN_AGENT_ID, clean));
       return;
     }
 

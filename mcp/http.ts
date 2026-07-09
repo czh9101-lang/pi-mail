@@ -34,11 +34,13 @@ export class BoardApiError extends Error {
 }
 
 /** GET /api/board — the board state (columns + tasks). Pass opts to filter
- *  by location/archive (task 6586b9ca); omit for the full board. */
+ *  by location/archive (task 6586b9ca) or scope by group (task b59e930a);
+ *  omit for the full board. */
 export async function getBoard(opts?: BoardListOpts): Promise<BoardState> {
   const qs = new URLSearchParams();
   if (opts?.location) qs.set("location", opts.location);
   if (opts?.includeArchived !== undefined) qs.set("includeArchived", String(opts.includeArchived));
+  if (opts?.group) qs.set("group", opts.group);
   const path = qs.toString() ? `/api/board?${qs}` : "/api/board";
   return request<BoardState>("GET", path);
 }
