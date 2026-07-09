@@ -23,6 +23,9 @@ const DAEMON = path.join(REPO, "extensions", "daemon.mjs");
 // ── Isolation harness ──────────────────────────────────────────────────────
 
 let tmpHome, proc, sockPath, port;
+// Kill any spawned daemon when the test runner exits (incl. Ctrl-C / timeout)
+// so interrupted runs don't leave orphan daemon processes behind.
+process.on("exit", () => { try { if (proc) proc.kill("SIGKILL"); } catch {} });
 
 function freePort() {
   return new Promise((resolve) => {
@@ -210,6 +213,60 @@ test("board_flag_task sets the unclear flag", async () => {
   const r = await call("tools/call", { name: "board_flag_task", arguments: { taskId: id, reason: "ambiguous scope" } });
   assert.ok(!r.body.result.isError, "tool returned an error: " + (r.body.result.content?.[0]?.text ?? ""));
   assert.match(r.body.result.content[0].text, /flagged unclear/);
+});
+
+// ── board_list_tasks location/archive filtering (task 6586b9ca) ────────────
+// Archived tasks are hidden by default; includeArchived / location fetch them
+// separately. Backlog is shown by default and via location:'backlog'.
+// boardState (board.mjs) is the single source of truth for the filter; the MCP
+// tool delegates via getBoard(opts). Markers persist across these tests (the
+// board is shared); node:test runs them in definition order.
+async function mkTask(args) {
+  const r = await call("tools/call", { name: "board_create_task", arguments: args });
+  assert.ok(!r.body.result.isError, "create failed: " + (r.body.result.content?.[0]?.text ?? ""));
+  return r.body.result.content[0].text.match(/\[([0-9a-f]{8})\]/)[1];
+}
+const boardText = (r) => r.body.result.content[0].text;
+
+test("board_list_tasks hides archived tasks by default (6586b9ca)", async () => {
+  await mkTask({ summary: "onboard-6586-marker" });
+  await mkTask({ summary: "backlog-6586-marker", backlog: true });
+  const arId = await mkTask({ summary: "archiveme-6586-marker" });
+  const mv = await call("tools/call", { name: "board_move_task", arguments: { taskId: arId, column: "archive" } });
+  assert.match(boardText(mv), /Moved/);
+
+  // Default: board + backlog shown, archive hidden.
+  const def = boardText(await call("tools/call", { name: "board_list_tasks", arguments: {} }));
+  assert.match(def, /onboard-6586-marker/);
+  assert.match(def, /backlog-6586-marker/);
+  assert.ok(!/archiveme-6586-marker/.test(def), "archive task must be hidden by default");
+  assert.ok(!/▌ Archive/.test(def), "Archive section must not render by default");
+
+  // includeArchived:true reveals the archive (board + backlog still shown).
+  const inc = boardText(await call("tools/call", { name: "board_list_tasks", arguments: { includeArchived: true } }));
+  assert.match(inc, /archiveme-6586-marker/);
+  assert.match(inc, /▌ Archive/);
+  assert.match(inc, /onboard-6586-marker/);
+});
+
+test("board_list_tasks location filter fetches each pool separately (6586b9ca)", async () => {
+  const boardOnly = boardText(await call("tools/call", { name: "board_list_tasks", arguments: { location: "board" } }));
+  assert.match(boardOnly, /onboard-6586-marker/);
+  assert.ok(!/backlog-6586-marker/.test(boardOnly), "location:'board' must exclude backlog");
+  assert.ok(!/▌ Backlog/.test(boardOnly), "location:'board' must not render the Backlog section");
+  assert.ok(!/archiveme-6586-marker/.test(boardOnly), "location:'board' must exclude archive");
+
+  const bkOnly = boardText(await call("tools/call", { name: "board_list_tasks", arguments: { location: "backlog" } }));
+  assert.match(bkOnly, /backlog-6586-marker/);
+  assert.match(bkOnly, /▌ Backlog/);
+  assert.ok(!/onboard-6586-marker/.test(bkOnly), "location:'backlog' must exclude on-board tasks");
+  assert.ok(!/archiveme-6586-marker/.test(bkOnly), "location:'backlog' must exclude archive");
+
+  const arOnly = boardText(await call("tools/call", { name: "board_list_tasks", arguments: { location: "archive" } }));
+  assert.match(arOnly, /archiveme-6586-marker/);
+  assert.match(arOnly, /▌ Archive/);
+  assert.ok(!/onboard-6586-marker/.test(arOnly), "location:'archive' must exclude on-board tasks");
+  assert.ok(!/backlog-6586-marker/.test(arOnly), "location:'archive' must exclude backlog");
 });
 
 test("get_board_config returns column list", async () => {

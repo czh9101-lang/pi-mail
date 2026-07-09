@@ -144,8 +144,8 @@ const MCP_BUILD_PATH = path.join(
  * (which expect those shapes) work unchanged.
  */
 const inProcessBoardBackend = {
-  async getBoard() {
-    return boardState(HUMAN_AGENT_ID);
+  async getBoard(opts) {
+    return boardState(HUMAN_AGENT_ID, opts);
   },
   async getBoardConfig() {
     return {
@@ -312,7 +312,12 @@ export function createHttpServer({ uiHtml, uiAssets }) {
     // ── Task board endpoints (actor: the human operator) ────────────────────
 
     if (req.method === "GET" && url.pathname === "/api/board") {
-      json(res, 200, boardState(HUMAN_AGENT_ID));
+      // Optional location/archive filter (task 6586b9ca): ?location=board|backlog|archive
+      // and ?includeArchived=true|false. Omit both for the full board (UI default).
+      const location = url.searchParams.get("location") || undefined;
+      const incArch = url.searchParams.get("includeArchived");
+      const opts = location || incArch !== null ? { location, includeArchived: incArch === "true" } : {};
+      json(res, 200, boardState(HUMAN_AGENT_ID, opts));
       return;
     }
 

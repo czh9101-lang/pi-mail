@@ -40,12 +40,9 @@ export function renderBoard(b: BoardState, filters: BoardListFilters = {}): stri
   if (mineAssignee) tasks = tasks.filter((t) => t.assignee === mineAssignee);
   if (level) tasks = tasks.filter((t) => (t.level ?? "task") === level);
   const showArchive = !!includeArchived || wantLoc === "archive";
-  // Default view: board + backlog, archive hidden (it's a filter, per operator).
-  tasks = tasks.filter((t) => {
-    const loc = t.location ?? "board";
-    if (wantLoc) return loc === wantLoc;
-    return loc !== "archive" || showArchive;
-  });
+  // NOTE: location/archive FILTERING is done server-side by boardState (task
+  // 6586b9ca, via getBoard(opts)); `b.tasks` arrives already filtered. The
+  // `wantLoc`/`showArchive` flags here only control which SECTIONS to render.
   if (tasks.length === 0) {
     return mineAssignee ? `No tasks assigned to ${mineAssignee}.` : "Board is empty.";
   }

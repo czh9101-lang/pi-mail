@@ -299,16 +299,32 @@ export function canAccessGroup(actorId, task) {
   return g === agentGroup(actorId);
 }
 
-export function boardState(actorId) {
+export function boardState(actorId, opts = {}) {
   // Agents only see their own group's tasks; the human operator sees all.
   // Manager agents (injected predicate) also see all groups — they oversee
   // multiple projects in a single pass.
   // Ungrouped tasks (no stamped group and no derivable assignee group) are
   // shown to everyone so historical data isn't hidden.
   const seesAll = !actorId || actorId === HUMAN_AGENT_ID || (managerAgentTest && managerAgentTest(actorId));
-  const tasks = seesAll
+  let tasks = seesAll
     ? board.tasks
     : board.tasks.filter((t) => canAccessGroup(actorId, t));
+  // Location/archive filter (task 6586b9ca) — single source of truth for the
+  // board_list_tasks default: archived tasks are hidden unless explicitly
+  // requested, and `location` filters to one pool ('board'|'backlog'|'archive').
+  // OPT-IN: when neither `location` nor `includeArchived` is supplied the full
+  // set (board + backlog + archive) is returned, so the raw board_state API and
+  // the web UI (which want everything) are unaffected. Callers that want the
+  // user-facing default (archive hidden) pass { includeArchived: false }.
+  const wantLoc = opts.location;
+  const showArchive = opts.includeArchived === true || wantLoc === "archive";
+  if (wantLoc !== undefined || opts.includeArchived !== undefined) {
+    tasks = tasks.filter((t) => {
+      const loc = t.location ?? "board";
+      if (wantLoc) return loc === wantLoc;
+      return loc !== "archive" || showArchive;
+    });
+  }
   return {
     columns: board.columns,
     tasks,

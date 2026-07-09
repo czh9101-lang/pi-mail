@@ -189,7 +189,7 @@ export function handleMessage(agentId, msg, socket) {
     // ── Task board ──────────────────────────────────────────────────────────
 
     case "board_state": {
-      reply({ type: "board", ...boardState(agentId) });
+      reply({ type: "board", ...boardState(agentId, { location: msg.location, includeArchived: msg.includeArchived }) });
       break;
     }
 

@@ -75,6 +75,16 @@ export interface BoardState {
   syncError: string | null;
 }
 
+/** Location/archive filter for GET /api/board (task 6586b9ca). When omitted
+ *  entirely the daemon returns the full board (board + backlog + archive).
+ *  Pass { includeArchived: false } for the user-facing default (archive hidden). */
+export interface BoardListOpts {
+  /** Filter to a location: 'board' | 'backlog' | 'archive'. */
+  location?: string;
+  /** Include archived tasks (location='archive') in the listing. */
+  includeArchived?: boolean;
+}
+
 /** Normalized result from a board mutation HTTP call. */
 export interface BoardOpResponse {
   ok: boolean;
@@ -117,7 +127,7 @@ export interface UpdateTaskBody {
  * bodies so the tool formatters work unchanged either way.
  */
 export interface BoardBackend {
-  getBoard(): Promise<BoardState>;
+  getBoard(opts?: BoardListOpts): Promise<BoardState>;
   getBoardConfig(): Promise<unknown>;
   setBoardConfig(config: Record<string, unknown>): Promise<unknown>;
   syncBoard(): Promise<unknown>;

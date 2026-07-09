@@ -61,7 +61,10 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
     },
     async ({ mine, location, level, includeArchived }) => {
       try {
-        const b = await http.getBoard();
+        // Delegate location/archive filtering to the daemon's boardState (task
+        // 6586b9ca) — single source of truth. Default (no params) hides the
+        // archive; backlog + board columns are shown.
+        const b = await http.getBoard({ location, includeArchived: includeArchived ?? false });
         return ok(renderBoard(b, { mineAssignee: mine ? "human" : null, location, level, includeArchived }));
       } catch (e) {
         return toolError(e);

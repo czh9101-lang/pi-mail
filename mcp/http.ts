@@ -11,7 +11,7 @@
  * http://127.0.0.1:${PI_MAIL_UI_PORT || 1994}.
  */
 
-import type { BoardState, BoardOpResponse, BoardBackend, CreateTaskBody, UpdateTaskBody } from "./types.js";
+import type { BoardState, BoardOpResponse, BoardBackend, BoardListOpts, CreateTaskBody, UpdateTaskBody } from "./types.js";
 
 /** Resolve the daemon base URL from env (with sensible defaults). */
 export function daemonBaseUrl(): string {
@@ -33,9 +33,14 @@ export class BoardApiError extends Error {
   }
 }
 
-/** GET /api/board — the full board state (columns + tasks). */
-export async function getBoard(): Promise<BoardState> {
-  return request<BoardState>("GET", "/api/board");
+/** GET /api/board — the board state (columns + tasks). Pass opts to filter
+ *  by location/archive (task 6586b9ca); omit for the full board. */
+export async function getBoard(opts?: BoardListOpts): Promise<BoardState> {
+  const qs = new URLSearchParams();
+  if (opts?.location) qs.set("location", opts.location);
+  if (opts?.includeArchived !== undefined) qs.set("includeArchived", String(opts.includeArchived));
+  const path = qs.toString() ? `/api/board?${qs}` : "/api/board";
+  return request<BoardState>("GET", path);
 }
 
 /** GET /api/board/config — board + Jira config (apiToken redacted server-side). */

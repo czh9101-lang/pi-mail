@@ -13,7 +13,7 @@ export interface BoardToolCtx { client: MailClient | null; connected: boolean; a
 function errText(err: unknown) { return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }; }
 function taskLine(t: BoardTask): string { const key = t.key ? `${t.key} ` : ""; const who = t.assignee ? ` → ${t.assignee}` : ""; const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : ""; const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : ""; const flag = t.flagged ? ` ⚠unclear` : ""; const lvl = t.level && t.level !== "task" ? ` ${t.level}` : ""; const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : ""; const grp = t.group ? ` ⟨${t.group}⟩` : ""; return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${grp}${flag}`; }
 function boardOpResult(resp: { type: string; warning?: string; message?: string; task?: BoardTask }, okText: string) { if (resp.type === "error") { return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] }; } const warn = resp.warning ? `\n⚠️ ${resp.warning}` : ""; return { content: [{ type: "text" as const, text: `✅ ${okText}${warn}` }], details: { task: resp.task } }; }
-async function fetchBoard(ctx: BoardToolCtx): Promise<BoardStateResp> { if (!ctx.connected || !ctx.client) throw new Error("Not connected to mail daemon"); const resp = await ctx.client.request<BoardStateResp>({ type: "board_state" }); if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error"); return resp; }
+async function fetchBoard(ctx: BoardToolCtx, opts: { location?: string; includeArchived?: boolean } = {}): Promise<BoardStateResp> { if (!ctx.connected || !ctx.client) throw new Error("Not connected to mail daemon"); const resp = await ctx.client.request<BoardStateResp>({ type: "board_state", ...opts }); if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error"); return resp; }
 export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
   pi.registerTool({
     name: "board_list_tasks",
@@ -36,18 +36,16 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       try {
-        const b = await fetchBoard(ctx);
+        // Delegate location/archive filtering to the daemon's boardState (task
+        // 6586b9ca) — single source of truth. Default (no params) hides the
+        // archive (includeArchived defaults to false); backlog + board columns
+        // are shown. `mine`/`level` stay here (presentation/agent-specific).
+        const b = await fetchBoard(ctx, { location: params.location, includeArchived: params.includeArchived ?? false });
         let tasks = b.tasks ?? [];
         if (params.mine) tasks = tasks.filter((t) => t.assignee === ctx.agentName);
         if (params.level) tasks = tasks.filter((t) => (t.level ?? "task") === params.level);
         const wantLoc = params.location;
         const showArchive = !!params.includeArchived || wantLoc === "archive";
-        // Default view: board + backlog, archive hidden (it's a filter, per operator).
-        tasks = tasks.filter((t) => {
-          const loc = t.location ?? "board";
-          if (wantLoc) return loc === wantLoc;
-          return loc !== "archive" || showArchive;
-        });
         const cols = b.columns ?? [];
         const lines: string[] = [];
         // Backlog pool (sits above the board) — show first when in default/board view.
