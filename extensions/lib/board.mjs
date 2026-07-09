@@ -12,6 +12,7 @@ import {
   log,
   agentDisplayName,
   sendMail,
+  resolveTarget,
 } from "./core.mjs";
 
 // ── Task board + Jira sync ───────────────────────────────────────────────────
@@ -103,6 +104,34 @@ export let board = {
     // in a while. Disableable + tunable from the board config endpoint.
     nudgeEnabled: true,
     nudgeIntervalMin: 30,
+    // Middle-manager: an ephemeral agent spawned on a schedule that reviews
+    // the board for the favorited (managed) projects, unblocks stuck workers,
+    // and shepherds finished tasks into Done/Archive. Disabled by default;
+    // no spawn when the favorites list is empty. See lib/middle-manager.mjs.
+    mmEnabled: false,
+    mmIntervalMin: 30,
+    mmModel: "",
+    mmMaxLifetimeMin: 15,
+    // Worker reaper safety bound. A daemon-spawned worker (any plain spawn —
+    // not an MM or CEO) that does not self-exit (mail_stop_self) within this
+    // many minutes is force-killed by the reaper so hung/forgotten workers
+    // never leak. Workers often run longer than a management pass, so the
+    // default is generous (30); the reaper is a backstop, not the primary
+    // path. See lib/middle-manager.mjs (reapWorkers) + the ephemerality
+    // invariant in the README.
+    workerMaxLifetimeMin: 30,
+    // CEO (top-tier manager): an ephemeral agent spawned on a schedule that
+    // reviews the federation at a higher level and spawns middle managers on
+    // demand. When enabled, it REPLACES the daemon's fixed-interval MM timer
+    // (the CEO becomes the sole MM spawner); the MM reaper still runs. See
+    // lib/ceo.mjs. Disabled by default.
+    ceoEnabled: false,
+    ceoIntervalMin: 120,
+    ceoModel: "",
+    // The CEO is a ~15-minute management thread (operator invariant 7/9). This
+    // is the hard safety bound: a CEO that does not self-exit within 15 min is
+    // force-killed by the reaper. See lib/ceo.mjs + README ephemerality.
+    ceoMaxLifetimeMin: 15,
   },
   /** @type {BoardColumn[]} */
   columns: DEFAULT_COLUMNS,
@@ -134,9 +163,19 @@ export function loadBoard() {
     const saved = JSON.parse(fs.readFileSync(BOARD_FILE, "utf8"));
     if (saved && typeof saved === "object") {
       // Saved config wins per-field; env vars remain fallback defaults.
-      for (const k of ["baseUrl", "email", "apiToken", "jql", "projectKey", "issueType", "subtaskIssueType", "nudgeEnabled", "nudgeIntervalMin"]) {
+      // Booleans (nudgeEnabled/mmEnabled) are restored even when false, so an
+      // intentionally-disabled setting survives a restart.
+      for (const k of ["baseUrl", "email", "apiToken", "jql", "projectKey", "issueType", "subtaskIssueType"]) {
         if (saved.config?.[k]) board.config[k] = saved.config[k];
       }
+      for (const k of ["nudgeEnabled", "mmEnabled", "ceoEnabled"]) {
+        if (typeof saved.config?.[k] === "boolean") board.config[k] = saved.config[k];
+      }
+      for (const k of ["nudgeIntervalMin", "mmIntervalMin", "mmMaxLifetimeMin", "workerMaxLifetimeMin", "ceoIntervalMin", "ceoMaxLifetimeMin"]) {
+        if (typeof saved.config?.[k] === "number" && Number.isFinite(saved.config[k])) board.config[k] = saved.config[k];
+      }
+      if (typeof saved.config?.mmModel === "string") board.config.mmModel = saved.config.mmModel;
+      if (typeof saved.config?.ceoModel === "string") board.config.ceoModel = saved.config.ceoModel;
       if (Array.isArray(saved.columns) && saved.columns.length > 0) board.columns = saved.columns;
       if (Array.isArray(saved.tasks)) board.tasks = saved.tasks;
       if (typeof saved.lastSync === "number") board.lastSync = saved.lastSync;
@@ -242,9 +281,19 @@ export function taskGroup(task) {
 }
 
 /** Whether actor agentId may see/modify task (same group; human sees all;
- *  ungrouped tasks are visible to all). */
+ *  ungrouped tasks are visible to all). Manager agents (middle-manager OR
+ *  CEO, registered via lib/middle-manager.mjs / lib/ceo.mjs) also see all
+ *  groups — they oversee multiple projects, so the same-group partition must
+ *  not hide tasks from them. The predicate is injected at startup to avoid a
+ *  circular import (board.mjs ← manager modules ← board.mjs). */
+export let managerAgentTest = null;
+export function setManagerAgentTest(fn) { managerAgentTest = fn; }
+/** Legacy alias kept for backward-compat with the MM module's own injection. */
+export function setMmAgentTest(fn) { managerAgentTest = fn; }
+
 export function canAccessGroup(actorId, task) {
   if (actorId === HUMAN_AGENT_ID) return true;
+  if (managerAgentTest && managerAgentTest(actorId)) return true;
   const g = taskGroup(task);
   if (!g) return true;
   return g === agentGroup(actorId);
@@ -252,11 +301,14 @@ export function canAccessGroup(actorId, task) {
 
 export function boardState(actorId) {
   // Agents only see their own group's tasks; the human operator sees all.
+  // Manager agents (injected predicate) also see all groups — they oversee
+  // multiple projects in a single pass.
   // Ungrouped tasks (no stamped group and no derivable assignee group) are
   // shown to everyone so historical data isn't hidden.
-  const tasks = actorId && actorId !== HUMAN_AGENT_ID
-    ? board.tasks.filter((t) => canAccessGroup(actorId, t))
-    : board.tasks;
+  const seesAll = !actorId || actorId === HUMAN_AGENT_ID || (managerAgentTest && managerAgentTest(actorId));
+  const tasks = seesAll
+    ? board.tasks
+    : board.tasks.filter((t) => canAccessGroup(actorId, t));
   return {
     columns: board.columns,
     tasks,

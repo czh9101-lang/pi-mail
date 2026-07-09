@@ -22,6 +22,7 @@
  *   mail_broadcast      — send to all connected agents
  *   mail_mark_read      — archive (remove) a message
  *   mail_list_agents    — list connected agents
+ *   mail_restart_daemon — restart the shared mail daemon
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -91,15 +92,15 @@ export default function (pi: ExtensionAPI) {
   // over the `let` vars above so inline code (bare `agentName`) and the
   // extracted modules (st.agentName) always read/write the SAME bindings.
   const st = {
-    get client() { return client; },
-    get connected() { return connected; },
+    get client() { return client; }, set client(v) { client = v; },
+    get connected() { return connected; }, set connected(v) { connected = v; },
     get agentId() { return agentId; },
     get agentName() { return agentName; }, set agentName(v) { agentName = v; },
     get agentStatus() { return agentStatus; }, set agentStatus(v) { agentStatus = v; },
     get agentModel() { return agentModel; },
     get agentCwd() { return agentCwd; },
     get nameCustomized() { return nameCustomized; }, set nameCustomized(v) { nameCustomized = v; },
-    get mailbox() { return mailbox; },
+    get mailbox() { return mailbox; }, set mailbox(v) { mailbox = v; },
     get suppressReconnect() { return suppressReconnect; }, set suppressReconnect(v) { suppressReconnect = v; },
     get latestCtx() { return latestCtx; }, set latestCtx(v) { latestCtx = v; },
     get updateStatus() { return updateStatus; },
@@ -340,6 +341,19 @@ export default function (pi: ExtensionAPI) {
     // Persist agentId once (first session only — not on reload)
     if (!agentIdRestored) {
       pi.appendEntry("pi-mail-id", { agentId });
+    }
+
+    // If pi was launched with a session name (`pi -n <name>`, e.g. by the
+    // mail_spawn_agent / spawn flow), adopt it as the agent display name so the
+    // registered name matches the tmux session name. Without this the extension
+    // would register under its own auto-slug (`<dir>-<ownUUID6>`, a DIFFERENT
+    // uuid than the daemon's), so the daemon could never link the registered
+    // agent back to the tmux session — breaking kickoff delivery and the UI's
+    // Terminal/Stop linkage. Only when the name hasn't been customized via
+    // mail_set_name (so an explicit name still wins on reload).
+    if (!nameCustomized) {
+      const sessionName = pi.getSessionName();
+      if (sessionName) agentName = sessionName;
     }
 
     await connectToDaemon();

@@ -115,6 +115,28 @@ export function agentDisplayName(agentId) {
   return agents.get(agentId)?.info.agentName ?? agentId;
 }
 
+/** Snapshot of every currently-connected agent plus the human virtual agent
+ *  (so the human is discoverable via list_agents and the UI). Shared by the
+ *  socket protocol's `list_agents` handler and the HTTP federation snapshot
+ *  so there is one source of truth. Lives here — core owns `agents` and the
+ *  human constants — so neither caller needs to pull in another daemon
+ *  module (core must stay dependency-free to avoid circular imports). */
+export function federationAgents() {
+  const list = Array.from(agents.values()).map((a) => a.info);
+  // Always expose the human as a virtual, discoverable agent.
+  list.push({
+    agentId: HUMAN_AGENT_ID,
+    agentName: HUMAN_AGENT_NAME,
+    registeredAt: 0,
+    status: "human operator",
+    contextPct: null,
+    cwd: "",
+    model: "",
+    isHuman: true,
+  });
+  return list;
+}
+
 /** Append a delivered message to the history log (UI source of truth). */
 export function logDelivery(message, toAgentId, opts = {}) {
   const entry = {

@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { AGENT_DIR, HUMAN_AGENT_ID, log, sendMail, resolveTarget, shellQuote } from "./core.mjs";
+import { AGENT_DIR, HUMAN_AGENT_ID, log, sendMail, resolveTarget, shellQuote, agents } from "./core.mjs";
 
 const SPAWN_FILE = path.join(AGENT_DIR, "mail-spawn.json");
 const PI_BIN = process.env.PI_MAIL_PI_BIN || "pi";
@@ -74,6 +74,16 @@ function loadSpawn() {
     if (saved.projects && typeof saved.projects === "object") {
       if (Array.isArray(saved.projects.history)) spawnRegistry.projects.history = saved.projects.history;
       if (Array.isArray(saved.projects.favorites)) spawnRegistry.projects.favorites = saved.projects.favorites;
+    }
+    // Middle-manager scheduler metadata (lastSpawnTs) so a restart doesn't
+    // immediately re-spawn an MM. See lib/middle-manager.mjs.
+    if (saved.mm && typeof saved.mm === "object" && typeof saved.mm.lastSpawnTs === "number") {
+      spawnRegistry.mm = { lastSpawnTs: saved.mm.lastSpawnTs };
+    }
+    // CEO scheduler metadata (lastSpawnTs) so a restart doesn't immediately
+    // re-spawn a CEO. See lib/ceo.mjs.
+    if (saved.ceo && typeof saved.ceo === "object" && typeof saved.ceo.lastSpawnTs === "number") {
+      spawnRegistry.ceo = { lastSpawnTs: saved.ceo.lastSpawnTs };
     }
     }
   } catch {
@@ -132,7 +142,7 @@ function tmuxSessionExists(name) {
  * Spawn a fresh pi agent in a tmux session.
  * @returns {{ ok?: true, name?: string, agentId?: string, warning?: string, error?: string }}
  */
-function spawnAgent({ cwd, name, model, kickoff, favorite }) {
+function spawnAgent({ cwd, name, model, kickoff, favorite, mm, ceo }) {
   const v = validateSpawnCwd(cwd);
   if (v.error) return { error: v.error };
   const dir = v.resolved;
@@ -172,11 +182,23 @@ function spawnAgent({ cwd, name, model, kickoff, favorite }) {
     kickoff: kickoff && String(kickoff).trim() ? String(kickoff).trim() : undefined,
     spawnedAt: Date.now(),
     agentName: session,
+    // `mm: true` marks a daemon-spawned middle-manager session (ephemeral,
+    // scheduled). Lets the MM scheduler detect live MM sessions (no overlap)
+    // and the reaper bound their lifetime. See lib/middle-manager.mjs.
+    // `ceo: true` marks a daemon-spawned CEO session (top-tier manager). See
+    // lib/ceo.mjs. Both are ephemeral management passes, not real project
+    // work, so they don't pollute the recent-projects list.
+    mm: !!mm,
+    ceo: !!ceo,
   };
   // Track the project dir in recent history (shared across the federation)
-  // and optionally star it as a favorite.
-  recordProject(dir, session);
-  if (favorite) setFavorite(dir, true);
+  // and optionally star it as a favorite. Skipped for middle-manager + CEO
+  // sessions — those are ephemeral management passes, not real project work,
+  // so they shouldn't pollute the recent-projects list.
+  if (!mm && !ceo) {
+    recordProject(dir, session);
+    if (favorite) setFavorite(dir, true);
+  }
   schedulePersistSpawn();
   log(`Spawned agent '${session}' in ${dir}`);
 
@@ -228,6 +250,56 @@ function stopAgent({ name }) {
   schedulePersistSpawn();
   log(`Stopped agent '${session}'`);
   return { ok: true };
+}
+
+/** Resolve an agentId (the caller) to its daemon-spawned session, if any.
+ *  Matches by stamped agentId first, then by registered agentName (the tmux
+ *  session name is known as soon as the agent registers, before agentId is
+ *  stamped). Returns the session name or null. */
+function sessionForAgent(agentId) {
+  if (!agentId) return null;
+  // Direct match on the stamped agentId.
+  for (const [name, s] of Object.entries(spawnRegistry.sessions)) {
+    if (s.agentId === agentId) return name;
+  }
+  // Fall back to the registered agentName (matches the tmux session name).
+  // `agents` is imported from core.mjs — the live registry has the agentName.
+  const info = agents.get(agentId)?.info;
+  if (info?.agentName) {
+    for (const [name, s] of Object.entries(spawnRegistry.sessions)) {
+      if (s.agentName === info.agentName) return name;
+    }
+  }
+  return null;
+}
+
+/** A daemon-spawned agent tears down its OWN session + registry entry. Used by
+ *  the `mail_stop_self` tool: workers, middle-managers, CEOs, and any other
+ *  daemon-spawned agent call this when their work is done so their tmux
+ *  session is reaped immediately instead of waiting for the reaper / operator.
+ *  Refuses operator-launched agents (not in the spawn registry) — they stay
+ *  alive unless explicitly stopped via the UI.
+ *
+ *  The registry entry is removed immediately (so the session is no longer
+ *  "live" for overlap / reaper checks); the tmux kill happens after a short
+ *  grace so the tool response + any final mail flush before the process dies.
+ *
+ *  @returns {{ ok?: true, name?: string, error?: string, graceMs?: number }} */
+function stopSelf({ agentId } = {}) {
+  const name = sessionForAgent(agentId);
+  if (!name) {
+    return { error: "not a daemon-spawned agent (mail_stop_self only tears down daemon-spawned sessions; operator-launched agents stay alive)" };
+  }
+  if (!spawnRegistry.sessions[name]) return { error: `session '${name}' not tracked` };
+  delete spawnRegistry.sessions[name];
+  schedulePersistSpawn();
+  const graceMs = parseInt(process.env.PI_MAIL_STOP_SELF_GRACE_MS || "3000", 10);
+  log(`stop_self: '${name}' will be torn down in ${graceMs}ms (self-exit by ${agentId.slice(0, 8)})`);
+  setTimeout(() => {
+    try { spawnSync(TMUX_BIN, ["kill-session", "-t", name]); } catch {}
+    log(`stop_self: reaped '${name}'`);
+  }, graceMs).unref?.();
+  return { ok: true, name, graceMs };
 }
 
 /**
@@ -327,7 +399,10 @@ function spawnState() {
     kickoff: s.kickoff || "",
     spawnedAt: s.spawnedAt,
     agentName: s.agentName || name,
+    agentId: s.agentId || "",
     alive: tmuxSessionExists(name),
+    mm: !!s.mm,
+    ceo: !!s.ceo,
   }));
   return { sessions, projects: projectsState() };
 }
@@ -337,6 +412,7 @@ export {
   flushSpawn,
   spawnAgent,
   stopAgent,
+  stopSelf,
   spawnState,
   listSpawnDir,
   spawnRegistry,
@@ -345,4 +421,5 @@ export {
   recordProject,
   setFavorite,
   projectsState,
+  schedulePersistSpawn,
 };

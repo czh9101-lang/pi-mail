@@ -23,6 +23,9 @@ const DAEMON = path.join(REPO, "extensions", "daemon.mjs");
 // ── Isolation harness ──────────────────────────────────────────────────────
 
 let tmpHome, tmpState, fakeTmux, proc, sockPath, client;
+// Kill any spawned daemon when the test runner exits (incl. Ctrl-C / timeout)
+// so interrupted runs don't leave orphan daemon processes behind.
+process.on("exit", () => { try { if (proc) proc.kill("SIGKILL"); } catch {} });
 
 function mkFakeTmux() {
   // A tmux stand-in. `new-session` records the session; `has-session` reports
@@ -249,6 +252,62 @@ test("kickoff is delivered once the spawned name registers", async () => {
   await spawnStop(client, "will-register");
 });
 
+// ── CEO-driven MM/CEO spawn injects the management kickoff (task 9ab32695) ──
+// When an orchestrator (the CEO) calls mail_spawn_agent({cwd, mm:true}) WITHOUT
+// a kickoff, the daemon must inject the canonical MM pass kickoff built from
+// the favorited projects — otherwise the spawned MM wakes up with an empty
+// inbox + empty context and sits idle until the reaper kills it. Same for
+// ceo:true. An explicit kickoff always wins.
+
+test("mm:true spawn with no kickoff injects the MM pass kickoff", async () => {
+  // Add a managed (favorited) project so mmKickoff has something to list.
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
+  const r = await client.request({ type: "spawn", cwd: tmpHome, name: "ceo-spawned-mm", mm: true });
+  assert.equal(r.type, "spawned", `mm spawn failed: ${JSON.stringify(r)}`);
+  const worker = await mkClient();
+  const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
+  await register(worker, "ceo-spawned-mm");
+  const got = await mail;
+  assert.match(got.body, /You are the middle-manager/, "MM kickoff was not injected");
+  assert.match(got.body, /Managed projects/, "MM kickoff must list managed projects");
+  assert.equal(got.newSession, true, "injected kickoff must be a fresh-session task");
+  // And the session is flagged mm:true so the reaper tracks it.
+  const st = await spawnState(client);
+  const s = st.sessions.find((x) => x.name === "ceo-spawned-mm");
+  assert.ok(s?.mm === true, "mm:true flag not recorded on the spawn registry entry");
+  worker.close();
+  await spawnStop(client, "ceo-spawned-mm");
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: false });
+});
+
+test("ceo:true spawn with no kickoff injects the CEO pass kickoff", async () => {
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
+  const r = await client.request({ type: "spawn", cwd: tmpHome, name: "op-spawned-ceo", ceo: true });
+  assert.equal(r.type, "spawned", `ceo spawn failed: ${JSON.stringify(r)}`);
+  const worker = await mkClient();
+  const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
+  await register(worker, "op-spawned-ceo");
+  const got = await mail;
+  assert.match(got.body, /You are the CEO/, "CEO kickoff was not injected");
+  worker.close();
+  await spawnStop(client, "op-spawned-ceo");
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: false });
+});
+
+test("explicit kickoff wins over the injected mm/ceo kickoff", async () => {
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
+  const r = await client.request({ type: "spawn", cwd: tmpHome, name: "explicit-kickoff-mm", mm: true, kickoff: "CUSTOM: do the thing" });
+  assert.equal(r.type, "spawned");
+  const worker = await mkClient();
+  const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
+  await register(worker, "explicit-kickoff-mm");
+  const got = await mail;
+  assert.equal(got.body, "CUSTOM: do the thing", "explicit kickoff must override the injected MM kickoff");
+  worker.close();
+  await spawnStop(client, "explicit-kickoff-mm");
+  await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: false });
+});
+
 // ── stop-only-tracked-sessions ──────────────────────────────────────────────
 
 test("spawn_stop refuses a name the daemon did not spawn", async () => {
@@ -344,4 +403,43 @@ test("regression: board state still works", async () => {
   assert.equal(r.type, "board");
   assert.ok(Array.isArray(r.columns) && r.columns.length > 0, "board columns missing");
   assert.ok(Array.isArray(r.tasks), "board tasks missing");
+});
+
+// ── tmux-session ↔ agent name linkage (task c92d3d18) ──────────────────────
+// The spawn flow names the tmux session (via `pi -n <name>`) and the
+// extension must register UNDER THAT SAME NAME so the daemon can link the
+// registered agentId into the spawn registry (and deliver the kickoff).
+// These tests pin the daemon-side contract the fixed extension satisfies.
+
+test("spawn registry links the agentId once the agent registers under the session name", async () => {
+  const agentId = crypto.randomUUID();
+  await spawn(client, { cwd: tmpHome, name: "linker", kickoff: "hi" });
+  const worker = await mkClient();
+  // The fixed extension adopts `pi -n linker` as its agent name, so it
+  // registers under "linker" — matching the tmux session name.
+  await worker.request({ type: "register", agentId, agentName: "linker", cwd: tmpHome });
+  // waitForRegistration polls every 250ms; give it room to resolve + persist.
+  await new Promise((r) => setTimeout(r, 700));
+  const st = await spawnState(client);
+  const s = st.sessions.find((x) => x.name === "linker");
+  assert.ok(s, "linker session missing from spawn state");
+  assert.equal(s.agentId, agentId, "registry did not link the registered agentId to the tmux session");
+  worker.close();
+  await spawnStop(client, "linker");
+});
+
+test("registry agentId stays empty when the agent registers under a different name (the bug this fix targets)", async () => {
+  // Old behaviour: the extension ignored `pi -n` and registered under its own
+  // auto-slug (`<dir>-<ownUUID6>`), so the daemon could never resolve the
+  // session name to a registered agent — the link stayed broken.
+  await spawn(client, { cwd: tmpHome, name: "mismatch-session", kickoff: "hi" });
+  const worker = await mkClient();
+  await register(worker, "mismatch-auto-slug"); // a DIFFERENT name than the session
+  await new Promise((r) => setTimeout(r, 700));
+  const st = await spawnState(client);
+  const s = st.sessions.find((x) => x.name === "mismatch-session");
+  assert.ok(s);
+  assert.equal(s.agentId, "", "registry should NOT link a name that doesn't match the session");
+  worker.close();
+  await spawnStop(client, "mismatch-session");
 });

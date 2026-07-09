@@ -11,6 +11,7 @@ import {
   broadcastMail,
   log,
   startHeartbeat,
+  federationAgents,
 } from "./core.mjs";
 import { boardState } from "./board.mjs";
 import {
@@ -26,11 +27,15 @@ import {
 import {
   spawnAgent,
   stopAgent,
+  stopSelf,
   spawnState,
   listSpawnDir,
   setFavorite,
   projectsState,
+  spawnRegistry,
 } from "./spawn.mjs";
+import { mmTick, mmState, mmKickoff } from "./middle-manager.mjs";
+import { ceoTick, ceoState, ceoKickoff } from "./ceo.mjs";
 import os from "node:os";
 
 // ── Message handler ───────────────────────────────────────────────────────────
@@ -155,7 +160,7 @@ export function handleMessage(agentId, msg, socket) {
 
     case "list_agents": {
       // Include the human so agents can discover and reply to the operator.
-      reply({ type: "agents", agents: federationState().agents });
+      reply({ type: "agents", agents: federationAgents() });
       break;
     }
 
@@ -246,13 +251,33 @@ export function handleMessage(agentId, msg, socket) {
 
     // ── Agent spawn (orchestrator tools) ────────────────────────────────────
     case "spawn": {
-      const r = spawnAgent({ cwd: msg.cwd, name: msg.name, model: msg.model, kickoff: msg.kickoff, favorite: msg.favorite });
+      // When an orchestrator (the CEO) requests an MM/CEO session via the
+      // tool without supplying a kickoff, inject the canonical management
+      // pass kickoff built from the favorited (managed) projects. Without this
+      // the spawned manager wakes up with an empty inbox + empty context and
+      // just sits idle until the reaper kills it — the CEO-driven path must
+      // match what the daemon's own scheduler (spawnMiddleManager/spawnCeo)
+      // does. An explicit kickoff always wins.
+      let kickoff = msg.kickoff;
+      const favorites = spawnRegistry.projects?.favorites ?? [];
+      if (!kickoff && msg.mm) kickoff = mmKickoff(favorites);
+      else if (!kickoff && msg.ceo) kickoff = ceoKickoff(favorites);
+      const r = spawnAgent({ cwd: msg.cwd, name: msg.name, model: msg.model, kickoff, favorite: msg.favorite, mm: msg.mm, ceo: msg.ceo });
       reply(r.error ? { type: "error", message: r.error } : { type: "spawned", name: r.name });
       break;
     }
     case "spawn_stop": {
       const r = stopAgent({ name: msg.name });
       reply(r.error ? { type: "error", message: r.error } : { type: "ok" });
+      break;
+    }
+    // A daemon-spawned agent tears down its OWN session + registry entry.
+    // Used by the mail_stop_self tool: workers, middle-managers, CEOs, and any
+    // other daemon-spawned agent call this when their work is done. Refuses
+    // operator-launched agents (not in the spawn registry). See lib/spawn.mjs.
+    case "stop_self": {
+      const r = stopSelf({ agentId });
+      reply(r.error ? { type: "error", message: r.error } : { type: "ok", name: r.name, graceMs: r.graceMs });
       break;
     }
     case "spawn_state": {
@@ -276,6 +301,32 @@ export function handleMessage(agentId, msg, socket) {
       break;
     }
 
+    // Middle-manager diagnostics: inspect scheduler state, or force one tick
+    // (optionally with a fake `now` for testing). The daemon's own loop drives
+    // ticks on a schedule; these let an operator / tests observe and trigger.
+    case "mm_state": {
+      reply({ type: "mm", ...mmState() });
+      break;
+    }
+    case "mm_tick": {
+      const r = mmTick(typeof msg.now === "number" ? msg.now : Date.now(), !!msg.force);
+      reply({ type: "ok", ...r });
+      break;
+    }
+
+    // CEO diagnostics: inspect scheduler state, or force one tick (optionally
+    // with a fake `now` for testing). The daemon's own loop drives ticks on a
+    // schedule; these let an operator / tests observe and trigger.
+    case "ceo_state": {
+      reply({ type: "ceo", ...ceoState() });
+      break;
+    }
+    case "ceo_tick": {
+      const r = ceoTick(typeof msg.now === "number" ? msg.now : Date.now(), !!msg.force);
+      reply({ type: "ok", ...r });
+      break;
+    }
+
     case "mark_read": {
       const box = mailboxes.get(agentId);
       if (box) {
@@ -283,6 +334,22 @@ export function handleMessage(agentId, msg, socket) {
         if (idx !== -1) box.splice(idx, 1);
       }
       reply({ type: "ok" });
+      break;
+    }
+
+    case "restart_daemon": {
+      // Restart the shared daemon. We reply first, then self-terminate after a
+      // short delay so the reply flushes. The SIGTERM handler runs cleanup()
+      // (flushes board/spawn/history, removes socket+pid+lock) — the same
+      // graceful path as an operator-initiated shutdown. Disconnected clients
+      // reconnect via their existing backoff; one of them respawns the daemon.
+      const requester = agents.get(agentId)?.info.agentName ?? agentId.slice(0, 8);
+      log(`Restart requested by ${requester}; shutting down for respawn`);
+      reply({ type: "ok", message: "restarting" });
+      setTimeout(() => {
+        try { process.kill(process.pid, "SIGTERM"); }
+        catch { /* already exiting */ }
+      }, 100);
       break;
     }
 
