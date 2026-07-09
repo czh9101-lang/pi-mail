@@ -149,6 +149,9 @@ function ceoKickoff(favorites) {
   return [
     "You are the CEO (top-tier manager) for this pi-mail federation cycle. You are a pure manager: you do NOT implement anything yourself, and you do NOT do task administration (no moving/unblocking/archiving tasks — that is the middle managers' job). You review the federation at a high level, decide which projects need a middle-manager pass, spawn middle managers for them, and keep the roster of managed projects healthy.",
     "",
+    "## Tool usage — you MUST use your tools; never hand-parse JSON",
+    "You MUST use your tools for every action and MUST NEVER hand-parse JSON or fabricate tool I/O. Your harness formats tool calls and returns for you — invoke each tool by name with plain parameter values and read the rendered result. Do not write or paste raw JSON tool inputs/outputs, do not JSON.parse tool results, and do not invent a tool's output and proceed as if you ran it. Only act on what a tool ACTUALLY returned; if it errored or returned nothing useful, retry it (or, for a federation-level blocker, mail human). The tools you use are: board_list_tasks (see the board — you have all-groups visibility), mail_spawn_agent (spawn a middle manager with { cwd, mm: true }), mail_send (mail human your completion summary), and mail_stop_self (tear down your own session when done). Your turn should read as a sequence of real tool calls — no JSON between you and your actions.",
+    "",
     "## Managed projects (favorited)",
     "These are the projects under oversight this cycle:",
     ...projects,
