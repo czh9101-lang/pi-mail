@@ -64,7 +64,12 @@ Concretely, your turn should read as a sequence of real tool calls: call
 its output → … → call `mail_send` → call `mail_stop_self`. No JSON between you
 and your actions.
 
-## The pass
+## The pass — consider EVERY managed project before exiting
+
+A pass is **not** one action. You review every managed project and decide, for
+each one, whether it needs an MM pass this cycle. Do not stop after the first
+project you look at — keep going until you have made a spawn-or-skip decision for
+every managed project, then finish.
 
 1. `mail_list_agents` — who's connected across the federation.
 2. `board_list_tasks` (you have all-groups visibility) — high-level overview of
@@ -110,6 +115,11 @@ task per distinct issue (fold related points together). Do **not** flood the
 board with feature requests.
 
 ## Done
+
+**Before you finish, confirm you have made a spawn-or-skip decision for every
+managed (favorited) project** — not just the first one you looked at. If you
+spawned an MM for one project and were about to exit, STOP — review the rest of
+the managed projects first.
 
 `mail_send` a concise summary to **human**: what you reviewed, which projects
 you spawned an MM for (and why), and any favorites you added/removed. Then call
