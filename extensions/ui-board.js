@@ -11,6 +11,9 @@ async function boardPost(path, payload, okMsg) {
   if (r.ok) {
     if (r.warning) toast("⚠ " + r.warning, true);
     else if (okMsg) toast(okMsg);
+    // A board mutation may have moved a task into/out of the archive pool;
+    // invalidate the on-demand archive cache so it reloads lazily.
+    boardUi.archiveTasks = null;
     await refresh();
   } else {
     toast("❌ " + (r.error || "failed"), true);

@@ -10,6 +10,8 @@ import http from "node:http";
 import os from "node:os";
 import {
   messageLog,
+  messagePage,
+  humanInboxCount,
   HUMAN_AGENT_ID,
   HUMAN_AGENT_NAME,
   log,
@@ -59,11 +61,18 @@ const UI_ASSET_TYPES = {
 // ── Federation snapshot (for the UI) ──────────────────────────────────────────
 
 function federationState() {
+  // Lean snapshot: the messageLog is no longer shipped in full here (it is
+  // unbounded history). Callers fetch pages via GET /api/messages instead.
+  // `messages` is now a small summary (total + human inbox count) so the UI
+  // status bar / badges keep working without the dump.
+  // The board excludes the archive pool by default (the UI fetches it on
+  // demand via /api/board?includeArchived=true when "show done" is toggled),
+  // so the 3s poll no longer ships archived tasks either.
   return {
     human: { agentId: HUMAN_AGENT_ID, agentName: HUMAN_AGENT_NAME },
     agents: federationAgents(),
-    messages: messageLog,
-    board: boardState(),
+    messages: { total: messageLog.length, unread: humanInboxCount() },
+    board: boardState(HUMAN_AGENT_ID, { includeArchived: false }),
     spawn: spawnState(),
     now: Date.now(),
   };
@@ -127,6 +136,30 @@ export function createHttpServer({ uiHtml, uiAssets }) {
 
     if (req.method === "GET" && url.pathname === "/api/state") {
       json(res, 200, federationState());
+      return;
+    }
+
+    // Paginated + filtered message history (task 312e01b3). The UI mailbox /
+    // history tabs fetch pages here instead of receiving the whole log via
+    // /api/state. Cursor pagination (newest-first); filters: archived
+    // (include|exclude|only), to/from/involves (agent name or id). Backward-
+    // compatible shape: { messages, nextCursor, hasMore, total }.
+    if (req.method === "GET" && url.pathname === "/api/messages") {
+      const limit = parseInt(url.searchParams.get("limit") || "", 10);
+      const cursor = url.searchParams.get("cursor") || undefined;
+      const archived = url.searchParams.get("archived") || undefined;
+      const to = url.searchParams.get("to") || undefined;
+      const from = url.searchParams.get("from") || undefined;
+      const involves = url.searchParams.get("involves") || undefined;
+      const opts = {
+        ...(Number.isFinite(limit) ? { limit } : {}),
+        ...(cursor ? { cursor } : {}),
+        ...(archived ? { archived } : {}),
+        ...(to ? { to } : {}),
+        ...(from ? { from } : {}),
+        ...(involves ? { involves } : {}),
+      };
+      json(res, 200, messagePage(opts));
       return;
     }
 

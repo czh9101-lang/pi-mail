@@ -108,11 +108,12 @@ The SPA talks to a tiny JSON API you can also call directly:
 
 | Method & path | Body | Returns |
 |---------------|------|---------|
-| `GET /api/state` | — | `{ human, agents[], messages[] }` — full snapshot |
+| `GET /api/state` | — | `{ human, agents[], messages{total,unread}, board, spawn, now }` — lean snapshot (no full message dump; board excludes archive) |
+| `GET /api/messages` | — | Paginated message history (newest-first): `?limit=&cursor=&archived=include\|exclude\|only&to=&from=&involves=` → `{ messages[], nextCursor, hasMore, total }` |
 | `POST /api/send` | `{ to, subject, body, newSession? }` | `{ ok, messageId? \| error? }` |
 | `POST /api/broadcast` | `{ subject, body }` | `{ ok, recipients }` |
 | `POST /api/archive` | `{ id }` | `{ ok }` — archives a message in the human inbox |
-| `GET /api/board` | — | Board snapshot: `{ columns[], tasks[], jiraConfigured, lastSync, syncError }` |
+| `GET /api/board` | — | Board snapshot: `{ columns[], tasks[], jiraConfigured, lastSync, syncError }`. Query: `?location=board\|backlog\|archive&includeArchived=true&group=all\|<name>` (archive hidden by default) |
 | `POST /api/board/move` | `{ taskId, column, note? }` | Move a task to a column, or to `backlog`/`archive` (off-board; local-only). Jira transition if the column is mapped |
 | `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package |
 | `POST /api/board/comment` | `{ taskId, text }` | Comment (also posted to Jira for Jira tasks) |

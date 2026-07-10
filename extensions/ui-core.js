@@ -13,6 +13,7 @@ let boardUi = {
   draftComments: {},            // taskId -> comment draft
   colsDraft: null,              // unsaved column edits (Settings tab)
   showArchive: false,           // status filter: show done (archived) tasks
+  archiveTasks: null,           // cached archive tasks (null = not loaded); fetched on demand from /api/board?location=archive since /api/state no longer ships them
   groupFilter: "__all",         // "__all" = every group, else a project group
   dragTaskId: null,            // task id being dragged (DnD); suppresses poll re-render
 };
@@ -20,7 +21,14 @@ let boardUi = {
 let mailboxUi = {
   selectedKey: "",            // conversation key (agent id, or sorted "a|b" pair for inter-agent)
   showInterAgent: false,      // toggle: also list agent↔agent conversations
+  messages: [],               // current page of messages fetched from /api/messages
+  cursor: null,               // next-page cursor (for infinite scroll; wired in the follow-up subtask)
+  hasMore: false,             // whether more pages are available
+  loading: false,             // fetch in flight (guards against concurrent fetches)
 };
+// History tab message cache. Fetches from /api/messages?to=<agent> so the tab
+// no longer depends on the full log being shipped in /api/state.
+let historyUi = { messages: [], loading: false };
 let pollTimer = null;
 let lastSig = null;
 
@@ -89,6 +97,63 @@ function toast(msg, isErr) {
 }
 
 // ── Data fetch ──────────────────────────────────────────────────────────────
+
+/** Fetch the archive (done) pool on demand. /api/state no longer ships
+ *  archived tasks (task 312e01b3), so the "show done" panel loads them from
+ *  /api/board?location=archive when toggled on. */
+async function loadArchive() {
+  try {
+    const r = await fetch("/api/board?location=archive", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const b = await r.json();
+    boardUi.archiveTasks = b.tasks ?? [];
+  } catch {
+    boardUi.archiveTasks = [];
+  }
+}
+
+/** Fetch a page of message history from the paginated /api/messages endpoint
+ *  (task 312e01b3). Returns { messages, nextCursor, hasMore, total }. */
+async function fetchMessages(opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  if (opts.archived) params.set("archived", opts.archived);
+  if (opts.to) params.set("to", opts.to);
+  if (opts.from) params.set("from", opts.from);
+  if (opts.involves) params.set("involves", opts.involves);
+  const qs = params.toString();
+  const r = await fetch("/api/messages" + (qs ? "?" + qs : ""), { cache: "no-store" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+/** Fetch the first page of messages for the mailbox (newest-first, all mail).
+ *  Resets the cache; load-more-on-scroll is wired in the follow-up subtask. */
+async function loadMailboxPage() {
+  if (mailboxUi.loading) return;
+  mailboxUi.loading = true;
+  try {
+    const page = await fetchMessages({ limit: 50 });
+    mailboxUi.messages = page.messages || [];
+    mailboxUi.cursor = page.nextCursor || null;
+    mailboxUi.hasMore = !!page.hasMore;
+  } catch { /* leave stale cache */ }
+  mailboxUi.loading = false;
+}
+
+/** Fetch the message history for the History tab (all mail delivered to an
+ *  agent, including archived). */
+async function loadHistoryPage(agentId) {
+  if (!agentId) { historyUi.messages = []; return; }
+  historyUi.loading = true;
+  try {
+    const page = await fetchMessages({ to: agentId, archived: "include", limit: 200 });
+    historyUi.messages = page.messages || [];
+  } catch { /* leave stale cache */ }
+  historyUi.loading = false;
+}
+
 async function refresh() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
@@ -99,7 +164,10 @@ async function refresh() {
     const n = state.agents.filter(a => !a.isHuman).length;
     const span = el("span", "pulse", "● live");
     $("#status").appendChild(span);
-    $("#status").appendChild(document.createTextNode(`  ·  ${n} agent${n === 1 ? "" : "s"}  ·  ${state.messages.length} message${state.messages.length === 1 ? "" : "s"} in history`));
+    // state.messages is now a { total, unread } summary (the full log is no
+    // longer shipped in /api/state — fetched on demand via /api/messages).
+    const total = state.messages?.total ?? 0;
+    $("#status").appendChild(document.createTextNode(`  ·  ${n} agent${n === 1 ? "" : "s"}  ·  ${total} message${total === 1 ? "" : "s"} in history`));
     // Re-rendering wipes the whole DOM tree in <main>, which on mobile
     // dismisses the on-screen keyboard every poll. So:
     //  - never re-render while the user is focused inside <main> (typing),
@@ -116,7 +184,15 @@ async function refresh() {
     const dragging = !!boardUi.dragTaskId;
     const sig = JSON.stringify([state.agents, state.messages, state.board]);
     if (focusedInMain || focusedInModal || dragging) { lastSig = sig; return; }
-    if (sig !== lastSig) { lastSig = sig; render(); }
+    if (sig !== lastSig) {
+      lastSig = sig;
+      // Mailbox / history read from the paginated /api/messages endpoint, not
+      // /api/state. Fetch their page (only when the tab is active) before
+      // rendering so the re-render has fresh message data.
+      if (currentTab === "mailbox") await loadMailboxPage();
+      else if (currentTab === "history") await loadHistoryPage(historyAgentId);
+      render();
+    }
   } catch (e) {
     $("#status").innerHTML = "";
     $("#status").appendChild(el("span", "", "⚠ disconnected (" + esc(e.message) + ")"));

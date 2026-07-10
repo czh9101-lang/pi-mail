@@ -62,7 +62,10 @@ function renderMailbox() {
     if (m.timestamp > c.sortTs) c.sortTs = m.timestamp;
   };
 
-  for (const m of state.messages) {
+  // Messages come from the paginated /api/messages endpoint (cached in
+  // mailboxUi.messages), not the full log in /api/state. Load-more-on-scroll
+  // is wired in the follow-up subtask; for now this renders the newest page.
+  for (const m of mailboxUi.messages) {
     const hFrom = m.fromId === HUMAN_ID;
     const hTo = m.toId === HUMAN_ID;
     if (hFrom || hTo) {
@@ -79,7 +82,7 @@ function renderMailbox() {
   const convs = [...convMap.entries()].map(([key, c]) => ({ key, ...c })).sort((a, b) => b.sortTs - a.sortTs);
 
   if (!convs.length) {
-    convList.appendChild(el("div", "empty", mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads."));
+    convList.appendChild(el("div", "empty", mailboxUi.loading ? "Loading…" : (mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads.")));
   }
   for (const c of convs) {
     const last = c.msgs.slice().sort((a, b) => b.timestamp - a.timestamp)[0];

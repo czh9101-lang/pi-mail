@@ -29,7 +29,7 @@ function renderBoard() {
   // an assignment — it reveals the Archive panel below the board.
   const archWrap = el("span", "checkbox");
   const archCb = el("input"); archCb.type = "checkbox"; archCb.id = "fa"; archCb.checked = boardUi.showArchive;
-  archCb.addEventListener("change", () => { boardUi.showArchive = archCb.checked; renderBoard(); });
+  archCb.addEventListener("change", () => { boardUi.showArchive = archCb.checked; if (archCb.checked && boardUi.archiveTasks == null) { loadArchive().then(renderBoard); } renderBoard(); });
   const archLbl = el("label", null, "show done (archive)"); archLbl.setAttribute("for", "fa"); archLbl.style.margin = "0";
   archWrap.appendChild(archCb); archWrap.appendChild(archLbl);
   bar.appendChild(archWrap);
@@ -151,14 +151,20 @@ function renderBoard() {
   // (show done) is on. Archived tasks are removed from their column (incl.
   // Done) and restorable via the card's move dropdown.
   if (boardUi.showArchive) {
-    const archTasks = (board.tasks ?? []).filter(t => t.location === "archive" && groupVisible(t));
+    const archTasks = (boardUi.archiveTasks ?? []).filter(t => groupVisible(t));
     const ar = el("div", "bcol"); ar.style.flex = "1 1 100%"; ar.style.maxWidth = "none";
     const arHead = el("div", "bhead");
     arHead.appendChild(el("span", "bname", "🗄 Archive (done board)"));
     arHead.appendChild(el("span", "badge custom", "off-board"));
     arHead.appendChild(el("span", "bcount", String(archTasks.length)));
     ar.appendChild(arHead);
-    if (!archTasks.length) ar.appendChild(el("div", "empty", "—"));
+    if (boardUi.archiveTasks == null) {
+      ar.appendChild(el("div", "empty", "Loading…"));
+      if (!boardUi._archLoading) {
+        boardUi._archLoading = true;
+        loadArchive().then(() => { boardUi._archLoading = false; renderBoard(); });
+      }
+    } else if (!archTasks.length) ar.appendChild(el("div", "empty", "—"));
     for (const t of archTasks) ar.appendChild(taskCard(t, board));
     makeDropTarget(ar, "archive");
     main.appendChild(ar);
@@ -252,16 +258,19 @@ function renderHistory() {
   const list = el("div"); list.style.marginTop = "8px";
   if (!historyAgentId) {
     list.appendChild(el("div", "empty", "Pick an agent to see all mail delivered to it (including archived and broadcasts)."));
+  } else if (historyUi.loading && !historyUi.messages.length) {
+    list.appendChild(el("div", "empty", "Loading…"));
   } else {
-    const msgs = state.messages.filter(m => m.toId === historyAgentId)
-      .sort((a, b) => b.timestamp - a.timestamp);
+    // historyUi.messages is already filtered server-side (to=<agent>) and
+    // sorted newest-first by /api/messages, so no extra filtering/sorting here.
+    const msgs = historyUi.messages;
     if (!msgs.length) list.appendChild(el("div", "empty", "No mail for this agent."));
     for (const m of msgs) list.appendChild(messageRow(m, { showFrom: true }));
   }
   card.appendChild(list);
   main.appendChild(card);
 
-  pick.addEventListener("change", () => { historyAgentId = pick.value; syncHash(); renderHistory(); });
+  pick.addEventListener("change", () => { historyAgentId = pick.value; syncHash(); const p = loadHistoryPage(historyAgentId); render(); p.then(render); });
 }
 
 // ── URL routing + tabs + polling ─────────────────────────────────────────────
@@ -307,6 +316,12 @@ function setTab(name) {
   if (name !== "board") closeTaskModal();
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x.dataset.tab === name));
   syncHash();
+  // Mailbox / history read from /api/messages (not /api/state). Kick off the
+  // fetch first (it sets the loading flag synchronously), render right away
+  // with the cached page (so the tab shows a loading state, not stale data),
+  // then re-render when the fetch lands. Load-more-on-scroll is wired separately.
+  if (name === "mailbox") { const p = loadMailboxPage(); render(); p.then(render); return; }
+  if (name === "history") { const p = loadHistoryPage(historyAgentId); render(); p.then(render); return; }
   render();
 }
 

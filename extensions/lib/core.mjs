@@ -242,6 +242,101 @@ export function broadcastMail(fromId, subject, body) {
   return { recipients: count, broadcastId };
 }
 
+// ── Paginated / filtered message history ───────────────────────────────────
+//
+// The web UI used to fetch the ENTIRE messageLog every poll (via /api/state).
+// messagePage returns a single page of the history, newest-first, with optional
+// filtering by archived state and by sender/recipient. Cursor pagination keeps
+// the page stable across polls: the cursor encodes the last item's
+// `${timestamp}:${id}`; the next page is everything strictly older than that
+// point (timestamp desc, id desc for a stable total order on equal timestamps).
+
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
+/** Encode a cursor (opaque to clients) from a history entry. */
+function encodeCursor(entry) {
+  return Buffer.from(`${entry.timestamp}:${entry.id}`, "utf8").toString("base64url");
+}
+
+/** Decode a cursor back to { ts, id }, or null if malformed/empty. */
+function decodeCursor(cursor) {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const sep = raw.lastIndexOf(":");
+    if (sep < 0) return null;
+    const ts = Number(raw.slice(0, sep));
+    const id = raw.slice(sep + 1);
+    if (!Number.isFinite(ts) || !id) return null;
+    return { ts, id };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve an agent spec (name, full id, or prefix) to an agentId, including
+ *  the human. Returns null when unresolvable (so a filter simply matches
+ *  nothing instead of erroring). */
+function resolveAgentId(spec) {
+  if (!spec) return null;
+  return resolveTarget(spec);
+}
+
+/** Count the human's non-archived inbox (messages addressed to the human that
+ *  haven't been archived) — used for the inbox badge in the lean state snapshot. */
+export function humanInboxCount() {
+  let n = 0;
+  for (const m of messageLog) {
+    if (m.toId === HUMAN_AGENT_ID && !m.archived) n++;
+  }
+  return n;
+}
+
+/** A single page of the message history, newest-first.
+ * @param {{ limit?: number, cursor?: string, archived?: "include"|"exclude"|"only",
+ *           to?: string, from?: string, involves?: string }} opts
+ * @returns {{ messages: object[], nextCursor: string|null, hasMore: boolean, total: number }} */
+export function messagePage(opts = {}) {
+  const limit = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.trunc(opts.limit) || DEFAULT_PAGE_SIZE));
+  const archived = opts.archived || "include";
+  const toId = opts.to ? resolveAgentId(opts.to) : null;
+  const fromId = opts.from ? resolveAgentId(opts.from) : null;
+  const invId = opts.involves ? resolveAgentId(opts.involves) : null;
+  const hasTo = opts.to != null;
+  const hasFrom = opts.from != null;
+  const hasInv = opts.involves != null;
+
+  // Filter (total reflects the filtered set, not just this page).
+  const filtered = messageLog.filter((m) => {
+    if (archived === "exclude" && m.archived) return false;
+    if (archived === "only" && !m.archived) return false;
+    if (hasTo && m.toId !== toId) return false;
+    if (hasFrom && m.fromId !== fromId) return false;
+    if (hasInv && m.fromId !== invId && m.toId !== invId) return false;
+    return true;
+  });
+
+  // Stable total order: newest first, id desc to break timestamp ties.
+  filtered.sort((a, b) => (b.timestamp - a.timestamp) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+
+  let start = 0;
+  const cursor = decodeCursor(opts.cursor);
+  if (cursor) {
+    // First item strictly older than the cursor (timestamp desc, id desc).
+    start = filtered.findIndex((m) =>
+      m.timestamp < cursor.ts || (m.timestamp === cursor.ts && m.id < cursor.id)
+    );
+    if (start < 0) start = filtered.length;
+  }
+
+  const page = filtered.slice(start, start + limit);
+  const hasMore = start + limit < filtered.length;
+  const nextCursor = hasMore && page.length ? encodeCursor(page[page.length - 1]) : null;
+
+  return { messages: page, nextCursor, hasMore, total: filtered.length };
+}
+
 // ── Human inbox operations ───────────────────────────────────────────────────
 
 /** Archive a message addressed to the human (hide from inbox). */
