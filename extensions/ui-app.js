@@ -48,14 +48,12 @@ function renderBoard() {
     gWrap.appendChild(gSel);
     bar.appendChild(gWrap);
   }
-  const settingsBtn = el("button", "btn secondary mini", boardUi.settingsOpen ? "Close settings" : "⚙ Settings");
-  settingsBtn.addEventListener("click", async () => {
-    boardUi.settingsOpen = !boardUi.settingsOpen;
-    if (boardUi.settingsOpen) await ensureBoardCfg();
-    else boardUi.colsDraft = null; // discard unsaved column edits on close
-    renderBoard();
-  });
-  bar.appendChild(settingsBtn);
+  // Backlog shortcut — opens the dedicated Backlog tab. Shows the current
+  // backlog count so parked items are discoverable without being on the board.
+  const blCount = (board.tasks ?? []).filter(t => (t.location ?? "board") === "backlog").length;
+  const blBtn = el("button", "btn secondary mini", "📥 Backlog" + (blCount ? " (" + blCount + ")" : ""));
+  blBtn.addEventListener("click", () => setTab("backlog"));
+  bar.appendChild(blBtn);
   // Run a CEO cycle now (manual trigger). Spawns a top-tier manager pass on
   // demand via a forced ceoTick — reuses the scheduler's own spawnCeo (first
   // favorite cwd, ceoModel, no-overlap guard, canonical ceoKickoff), so no
@@ -90,11 +88,6 @@ function renderBoard() {
     idleRow.appendChild(el("span", "idle-none", "no agents idle"));
   }
   main.appendChild(idleRow);
-
-  // Settings
-  if (boardUi.settingsOpen) {
-    main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config }));
-  }
 
   // New (local) task — supports level (epic/story/task) and a backlog flag.
   const nt = el("div", "newtask");
@@ -135,23 +128,6 @@ function renderBoard() {
   });
   nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
-
-  // Backlog pool — sits ABOVE the board columns. Items here are not yet
-  // placed on a column (location='backlog', columnId null). Local-only.
-  const backlogTasks = (board.tasks ?? []).filter(t => (t.location ?? "board") === "backlog");
-  if (backlogTasks.length || true) {
-    const bl = el("div", "bcol"); bl.style.flex = "1 1 100%"; bl.style.maxWidth = "none";
-    const blHead = el("div", "bhead");
-    blHead.appendChild(el("span", "bname", "📥 Backlog"));
-    blHead.appendChild(el("span", "badge custom", "off-board"));
-    blHead.appendChild(el("span", "bcount", String(backlogTasks.length)));
-    bl.appendChild(blHead);
-    bl.appendChild(el("div", "binstr", "Items not yet placed on a board column. Use the card's move dropdown to place one onto a column (it then leaves the backlog)."));
-    if (!backlogTasks.length) bl.appendChild(el("div", "empty", "—"));
-    for (const t of backlogTasks) bl.appendChild(taskCard(t, board));
-    makeDropTarget(bl, "backlog");
-    main.appendChild(bl);
-  }
 
   // Kanban columns
   const kb = el("div", "board");
@@ -216,18 +192,133 @@ function messageRow(m, opts = {}) {
 
 function renderMailbox() {
   main.innerHTML = "";
-  const grid = el("div", "two-col");
+  const grid = el("div", "mb-grid");
 
-  // Compose
+  // ── Left pane: conversation list ──────────────────────────────────────
+  const left = el("div", "mb-left");
+  const leftHead = el("div", "mb-left-head");
+  leftHead.appendChild(el("h2", null, "Conversations"));
+  left.appendChild(leftHead);
+
+  // Toggle: include inter-agent (agent↔agent) conversations. When off (default)
+  // the list shows only conversations that involve the human, grouped per
+  // peer agent (Outlook-style: one row per correspondent). When on, also
+  // shows agent↔agent threads.
+  const toggleWrap = el("div", "checkbox");
+  const tCb = el("input"); tCb.type = "checkbox"; tCb.id = "mb-ia"; tCb.checked = mailboxUi.showInterAgent;
+  tCb.addEventListener("change", () => { mailboxUi.showInterAgent = tCb.checked; renderMailbox(); });
+  const tLbl = el("label", null, "Show inter-agent messages"); tLbl.setAttribute("for", "mb-ia"); tLbl.style.margin = "0";
+  toggleWrap.appendChild(tCb); toggleWrap.appendChild(tLbl);
+  left.appendChild(toggleWrap);
+
+  const convList = el("div", "mb-conv-list");
+
+  // Build conversations. A conversation is keyed by the agent pair. For
+  // human↔agent threads the key is the agent id; for agent↔agent threads the
+  // key is the sorted "a|b" pair (so both directions collapse into one row).
+  // Each row shows the last message's snippet + timestamp so the list is
+  // scannable like an Outlook message list.
+  const convMap = new Map(); // key -> { msgs: [...], label, sortTs }
+  const consider = (m, key, label) => {
+    if (!convMap.has(key)) convMap.set(key, { msgs: [], label, sortTs: 0 });
+    const c = convMap.get(key);
+    c.msgs.push(m);
+    if (m.timestamp > c.sortTs) c.sortTs = m.timestamp;
+  };
+
+  for (const m of state.messages) {
+    const hFrom = m.fromId === HUMAN_ID;
+    const hTo = m.toId === HUMAN_ID;
+    if (hFrom || hTo) {
+      const peerId = hFrom ? m.toId : m.fromId;
+      const peerName = hFrom ? (m.toName || shortId(m.toId)) : (m.fromName || m.fromId);
+      consider(m, peerId, peerName);
+    } else if (mailboxUi.showInterAgent) {
+      const pair = [m.fromId, m.toId].sort().join("|");
+      const label = (m.fromName || shortId(m.fromId)) + " ↔ " + (m.toName || shortId(m.toId));
+      consider(m, pair, label);
+    }
+  }
+
+  const convs = [...convMap.entries()].map(([key, c]) => ({ key, ...c })).sort((a, b) => b.sortTs - a.sortTs);
+
+  if (!convs.length) {
+    convList.appendChild(el("div", "empty", mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads."));
+  }
+  for (const c of convs) {
+    const last = c.msgs.slice().sort((a, b) => b.timestamp - a.timestamp)[0];
+    const lastDir = last.fromId === HUMAN_ID ? "→ " : "← ";
+    const snippet = (last.subject || "(no subject)") + " — " + (last.body || "").replace(/\s+/g, " ").slice(0, 60);
+    const row = el("div", "mb-conv-row" + (c.key === mailboxUi.selectedKey ? " active" : ""));
+    const nm = el("div", "mb-conv-name", c.label);
+    const sn = el("div", "mb-conv-snippet", lastDir + snippet);
+    const ts = el("div", "mb-conv-ts", fmtTime(last.timestamp).split(",")[0]);
+    row.appendChild(nm); row.appendChild(sn); row.appendChild(ts);
+    row.addEventListener("click", () => { mailboxUi.selectedKey = c.key; syncHash(); renderMailbox(); });
+    convList.appendChild(row);
+  }
+  left.appendChild(convList);
+  grid.appendChild(left);
+
+  // ── Right pane: conversation thread + compose ─────────────────────────
+  const right = el("div", "mb-right");
+
+  const sel = convs.find(c => c.key === mailboxUi.selectedKey);
+  if (!sel) {
+    const empty = el("div", "card mb-empty");
+    empty.appendChild(el("h2", null, "Select a conversation"));
+    empty.appendChild(el("div", "empty", "Pick a conversation from the left to see the full thread and compose a reply."));
+    right.appendChild(empty);
+    grid.appendChild(right);
+    main.appendChild(grid);
+    return;
+  }
+
+  const selConv = sel;
+  // Auto-select the peer as the compose recipient (human↔agent threads).
+  if (selConv.msgs.some(m => m.fromId === HUMAN_ID || m.toId === HUMAN_ID)) {
+    const sample = selConv.msgs.find(m => m.fromId === HUMAN_ID || m.toId === HUMAN_ID);
+    const peer = sample.fromId === HUMAN_ID ? sample.toName : sample.fromName;
+    if (peer && compose.to !== peer) compose.to = peer;
+  }
+
+  const thread = selConv.msgs.sort((a, b) => a.timestamp - b.timestamp);
+  const threadHead = el("div", "mb-thread-head");
+  threadHead.appendChild(el("h2", null, selConv.label));
+  threadHead.appendChild(el("span", "mb-thread-count", thread.length + " message" + (thread.length === 1 ? "" : "s")));
+  right.appendChild(threadHead);
+
+  const threadCard = el("div", "card mb-thread");
+  for (const m of thread) {
+    const opts = {
+      showFrom: m.toId === HUMAN_ID,
+      showTo: m.fromId === HUMAN_ID,
+      actions: []
+    };
+    if (m.toId === HUMAN_ID && !m.archived) {
+      const replyBtn = el("button", "btn secondary", "Reply");
+      replyBtn.addEventListener("click", () => {
+        compose.to = m.fromName || m.fromId;
+        compose.subject = (m.subject || "").startsWith("Re:") ? m.subject : "Re: " + (m.subject || "");
+        compose.body = "";
+        syncHash(); renderMailbox();
+        const ta = right.querySelector(".compose textarea"); if (ta) ta.focus();
+      });
+      const archiveBtn = el("button", "btn secondary", "Archive");
+      archiveBtn.addEventListener("click", async () => { await post("/api/archive", { id: m.id }); refresh(); });
+      opts.actions.push(replyBtn, archiveBtn);
+    }
+    threadCard.appendChild(messageRow(m, opts));
+  }
+  right.appendChild(threadCard);
+
+  // ── Compose (reply) ───────────────────────────────────────────────────
   const composeCard = el("div", "card compose");
   composeCard.appendChild(el("h2", null, "Compose (as " + state.human.agentName + ")"));
   const labelTo = el("label", null, "To (agent name or id — leave blank for broadcast)");
   composeCard.appendChild(labelTo);
   const inputTo = el("input"); inputTo.value = compose.to; inputTo.placeholder = "e.g. portal-web-worker";
   composeCard.appendChild(inputTo);
-  // <datalist> suggestions don't render on iOS Safari / most mobile browsers,
-  // so show always-visible tappable chips of known agents instead. Tapping a
-  // chip fills the recipient and keeps the field editable for free-text ids.
   const chips = el("div", "chips");
   for (const a of state.agents) {
     if (a.isHuman) continue;
@@ -238,22 +329,18 @@ function renderMailbox() {
   }
   if (!chips.children.length) chips.appendChild(el("span", "empty", "No other agents connected."));
   composeCard.appendChild(chips);
-
   composeCard.appendChild(el("label", null, "Subject"));
   const inputSubj = el("input"); inputSubj.value = compose.subject;
   composeCard.appendChild(inputSubj);
-
   composeCard.appendChild(el("label", null, "Body"));
   const taBody = el("textarea"); taBody.value = compose.body;
   composeCard.appendChild(taBody);
-
   const cbWrap = el("div", "checkbox");
   const cb = el("input"); cb.type = "checkbox"; cb.id = "ns"; cb.checked = compose.newSession;
   const cbLabel = el("label", null, "Start fresh session on recipient (newSession)");
   cbLabel.setAttribute("for", "ns"); cbLabel.style.margin = "0";
   cbWrap.appendChild(cb); cbWrap.appendChild(cbLabel);
   composeCard.appendChild(cbWrap);
-
   const btnRow = el("div", "row");
   btnRow.style.marginTop = "10px";
   const sendBtn = el("button", "btn", "Send");
@@ -261,7 +348,6 @@ function renderMailbox() {
   btnRow.appendChild(sendBtn); btnRow.appendChild(bcastBtn);
   composeCard.appendChild(btnRow);
 
-  // keep draft in sync
   inputTo.addEventListener("input", () => compose.to = inputTo.value);
   inputSubj.addEventListener("input", () => compose.subject = inputSubj.value);
   taBody.addEventListener("input", () => compose.body = taBody.value);
@@ -283,47 +369,82 @@ function renderMailbox() {
     else toast("❌ " + (r.error || "broadcast failed"), true);
   });
 
-  grid.appendChild(composeCard);
-
-  // Inbox + Outbox
-  const right = el("div");
-  const inboxCard = el("div", "card");
-  inboxCard.appendChild(el("h2", null, "Inbox (mail to you)"));
-  const inbox = state.messages.filter(m => m.toId === HUMAN_ID && !m.archived)
-    .sort((a, b) => b.timestamp - a.timestamp);
-  if (!inbox.length) inboxCard.appendChild(el("div", "empty", "No mail yet."));
-  for (const m of inbox) {
-    const replyBtn = el("button", "btn secondary", "Reply");
-    replyBtn.addEventListener("click", () => { compose.to = m.fromName || m.fromId; inputTo.value = compose.to; compose.subject = m.subject.startsWith("Re:") ? m.subject : "Re: " + m.subject; inputSubj.value = compose.subject; compose.body = ""; taBody.value = ""; setTab("mailbox"); inputTo.scrollIntoView(); });
-    const archiveBtn = el("button", "btn secondary", "Archive");
-    archiveBtn.addEventListener("click", async () => { await post("/api/archive", { id: m.id }); refresh(); });
-    inboxCard.appendChild(messageRow(m, { showFrom: true, actions: [replyBtn, archiveBtn] }));
-  }
-  right.appendChild(inboxCard);
-
-  const outboxCard = el("div", "card");
-  outboxCard.appendChild(el("h2", null, "Outbox (mail you sent)"));
-  const outbox = state.messages.filter(m => m.fromId === HUMAN_ID)
-    .sort((a, b) => b.timestamp - a.timestamp);
-  if (!outbox.length) outboxCard.appendChild(el("div", "empty", "Nothing sent yet."));
-  // Group broadcasts together.
-  const groups = new Map(); // broadcastId -> [msgs]
-  const standalone = [];
-  for (const m of outbox) {
-    if (m.broadcastId) { if (!groups.has(m.broadcastId)) groups.set(m.broadcastId, []); groups.get(m.broadcastId).push(m); }
-    else standalone.push(m);
-  }
-  for (const m of standalone) outboxCard.appendChild(messageRow(m, { showTo: true }));
-  for (const [bid, msgs] of groups) {
-    const g = el("div", "group");
-    g.appendChild(el("div", "gtitle", `📡 broadcast · ${msgs.length} recipient${msgs.length === 1 ? "" : "s"} · ${fmtTime(msgs[0].timestamp)}`));
-    for (const m of msgs.sort((a, b) => a.toName < b.toName ? -1 : 1)) g.appendChild(messageRow(m, { showTo: true }));
-    outboxCard.appendChild(g);
-  }
-  right.appendChild(outboxCard);
-
+  right.appendChild(composeCard);
   grid.appendChild(right);
   main.appendChild(grid);
+}
+
+/** Conversation key for a single message: the peer agent id for human↔agent
+ *  threads, or the sorted "fromId|toId" pair for inter-agent threads. */
+function convOf(m) {
+  if (m.fromId === HUMAN_ID) return m.toId;
+  if (m.toId === HUMAN_ID) return m.fromId;
+  return [m.fromId, m.toId].sort().join("|");
+}
+
+// ── Backlog tab (daa0148b) ─────────────────────────────────────────────────
+// A dedicated page for the backlog pool (location='backlog', not on a board
+// column). Cards can be dragged onto columns, or moved via their dropdown.
+// Includes a quick-create input so items can be added straight to the backlog.
+function renderBacklog() {
+  main.innerHTML = "";
+  const board = state.board;
+  if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
+
+  const head = el("div", "board-toolbar");
+  head.appendChild(el("h2", null, "📥 Backlog"));
+  head.appendChild(el("span", "sync", "Off-board items not yet placed on a column (local-only). Drag onto a column or use a card's move dropdown to place it."));
+  main.appendChild(head);
+
+  // Quick-create straight into the backlog.
+  const nt = el("div", "newtask");
+  const inSum = el("input"); inSum.placeholder = "New backlog item summary…"; inSum.value = boardUi.newTask.summary;
+  inSum.addEventListener("input", () => boardUi.newTask.summary = inSum.value);
+  const lvlPick = el("select", "agentpick");
+  for (const lv of ["task", "epic", "story"]) {
+    const o = el("option"); o.value = lv; o.textContent = lv; if (lv === (boardUi.newTask.level || "task")) o.selected = true; lvlPick.appendChild(o);
+  }
+  lvlPick.title = "Issue level";
+  lvlPick.addEventListener("change", () => boardUi.newTask.level = lvlPick.value);
+  const addBtn = el("button", "btn", "Add to backlog");
+  addBtn.addEventListener("click", async () => {
+    const summary = boardUi.newTask.summary.trim();
+    if (!summary) { toast("Give the item a summary", true); return; }
+    const desc = boardUi.newTask.description.trim();
+    const payload = { summary, level: boardUi.newTask.level, backlog: true };
+    if (desc) payload.description = desc;
+    const r = await boardPost("/api/board/create", payload, "Backlog item created");
+    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; inSum.value = ""; }
+  });
+  nt.appendChild(inSum); nt.appendChild(lvlPick); nt.appendChild(addBtn);
+  main.appendChild(nt);
+
+  // Backlog pool as a full-width column.
+  const backlogTasks = (board.tasks ?? []).filter(t => (t.location ?? "board") === "backlog");
+  const bl = el("div", "bcol"); bl.style.flex = "1 1 100%"; bl.style.maxWidth = "none";
+  const blHead = el("div", "bhead");
+  blHead.appendChild(el("span", "bname", "📥 Backlog"));
+  blHead.appendChild(el("span", "badge custom", "off-board"));
+  blHead.appendChild(el("span", "bcount", String(backlogTasks.length)));
+  bl.appendChild(blHead);
+  bl.appendChild(el("div", "binstr", "Drag a card onto a board column (switch to the Board tab), or use the card's move dropdown to place an item."));
+  if (!backlogTasks.length) bl.appendChild(el("div", "empty", "Backlog is empty."));
+  for (const t of backlogTasks) bl.appendChild(taskCard(t, board));
+  makeDropTarget(bl, "backlog");
+  main.appendChild(bl);
+
+  renderTaskModal();
+}
+
+// ── Settings tab (0f3b5549) ────────────────────────────────────────────────
+// Board + Jira + MM + CEO + columns configuration on its own dedicated tab.
+// The settings card is shared (boardSettingsCard), defined in ui-board.js.
+async function renderSettings() {
+  main.innerHTML = "";
+  await ensureBoardCfg();
+  const board = state.board;
+  if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
+  main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config }));
 }
 
 function renderHistory() {
@@ -365,7 +486,7 @@ function renderHistory() {
 // pushes the hash; the hashchange listener handles navigations that arrive
 // from outside setTab (back/forward, initial deep-link) and no-ops when the
 // hash already matches in-memory state (no render loop).
-const VALID_TABS = ["agents", "board", "mailbox", "history"];
+const VALID_TABS = ["agents", "board", "backlog", "mailbox", "history", "settings"];
 
 function routeFor(tab, agentId) {
   if (tab === "history" && agentId) return "history/" + agentId;

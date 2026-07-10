@@ -504,7 +504,7 @@ function boardSettingsCard(board) {
       columns: rows,
     });
     save.disabled = false;
-    if (r.ok) { toast("✅ Board settings saved — syncing"); delete boardCfgCache.cfg; boardUi.settingsOpen = false; boardUi.colsDraft = null; refresh(); }
+    if (r.ok) { toast("✅ Board settings saved — syncing"); delete boardCfgCache.cfg; boardUi.colsDraft = null; refresh(); }
     else toast("❌ " + (r.error || "save failed"), true);
   });
   btnRow.appendChild(addCol); btnRow.appendChild(save);

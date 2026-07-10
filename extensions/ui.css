@@ -96,6 +96,34 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
     margin-bottom: 10px; background: var(--panel2);
   }
+
+  /* ── Mailbox (Outlook-style 3-pane) ──────────────────────────────────── */
+  .mb-grid { display: grid; grid-template-columns: 320px 1fr; gap: 12px; height: 100%; min-height: 0; }
+  .mb-left { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; max-height: calc(100vh - 120px); overflow: hidden; }
+  .mb-left-head { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .mb-left-head h2 { margin: 0; }
+  .mb-left .checkbox { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  .mb-conv-list { overflow-y: auto; flex: 1; min-height: 0; }
+  .mb-conv-row { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .mb-conv-row:hover { background: #1a2029; }
+  .mb-conv-row.active { background: #1f2733; border-left: 3px solid var(--accent); }
+  .mb-conv-name { font-weight: 600; font-size: 13px; }
+  .mb-conv-snippet { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .mb-conv-ts { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .mb-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .mb-thread-head { display: flex; align-items: baseline; gap: 10px; }
+  .mb-thread-head h2 { margin: 0; }
+  .mb-thread-count { color: var(--dim); font-size: 12px; }
+  .mb-thread { max-height: 40vh; overflow-y: auto; }
+  .mb-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; min-height: 300px; }
+  @media (max-width: 900px) {
+    .mb-grid { grid-template-columns: 1fr; }
+    .mb-left { max-height: 280px; }
+    .mb-thread { max-height: none; }
+  }
+
+  /* ── Settings page ───────────────────────────────────────────────────── */
+  .board-settings { max-width: 760px; }
   .msg .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .msg .subj { font-weight: 600; }
   .msg .meta { color: var(--dim); font-size: 12px; }

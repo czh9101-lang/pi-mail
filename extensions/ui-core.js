@@ -8,14 +8,18 @@ let compose = { to: "", subject: "", body: "", newSession: false }; // sticky co
 // Board UI state that must survive re-renders (poll every 3s)
 let boardUi = {
   taskModalId: null,            // task whose detail modal is open
-  settingsOpen: false,
   freshSession: true,           // newSession flag used when assigning
   newTask: { summary: "", description: "", column: "", level: "task", backlog: false },
   draftComments: {},            // taskId -> comment draft
-  colsDraft: null,              // unsaved column edits while settings are open
+  colsDraft: null,              // unsaved column edits (Settings tab)
   showArchive: false,           // status filter: show done (archived) tasks
   groupFilter: "__all",         // "__all" = every group, else a project group
   dragTaskId: null,            // task id being dragged (DnD); suppresses poll re-render
+};
+// Mailbox UI state (Outlook-style conversation view) — survives re-renders.
+let mailboxUi = {
+  selectedKey: "",            // conversation key (agent id, or sorted "a|b" pair for inter-agent)
+  showInterAgent: false,      // toggle: also list agent↔agent conversations
 };
 let pollTimer = null;
 let lastSig = null;
@@ -132,7 +136,9 @@ async function post(path, payload) {
 function render() {
   if (currentTab === "agents") renderAgents();
   else if (currentTab === "board") renderBoard();
+  else if (currentTab === "backlog") renderBacklog();
   else if (currentTab === "mailbox") renderMailbox();
+  else if (currentTab === "settings") renderSettings();
   else if (currentTab === "history") renderHistory();
 }
 
