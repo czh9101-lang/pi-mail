@@ -21,6 +21,7 @@ let boardUi = {
 let mailboxUi = {
   selectedKey: "",            // conversation key (agent id, or sorted "a|b" pair for inter-agent)
   showInterAgent: false,      // toggle: also list agent↔agent conversations
+  folder: "all",              // nav-pane folder: all | inbox | sent | archive (drives the /api/messages filter)
   messages: [],               // accumulated messages (newest-first); grown via infinite scroll
   cursor: null,               // next-page cursor for loading older messages (null = no more)
   hasMore: false,             // whether more pages are available (mirrors cursor != null)
@@ -130,18 +131,47 @@ async function fetchMessages(opts = {}) {
   return r.json();
 }
 
-/** Fetch the first page of messages for the mailbox (newest-first, all mail).
- *  On the initial load this seeds the cache; on a 3s poll refresh it only
- *  PREPENDS newly-arrived messages (matched by id) so infinite-scroll
- *  accumulation below is never clobbered. The next-page cursor is preserved
- *  across refreshes — it is a stable (ts,id) boundary, so even after new mail
- *  arrives it still points to the correct older page (no gaps, no dupes). */
+/** /api/messages filter params for a mailbox nav-pane folder. The folders
+ *  map onto server-side filters; the conversation-grouped message list and
+ *  infinite scroll work uniformly on whatever filtered set is returned. */
+function mailboxFolderParams(folder) {
+  switch (folder) {
+    case "inbox":   return { to: "human", archived: "exclude" };
+    case "sent":    return { from: "human" };
+    case "archive": return { to: "human", archived: "only" };
+    default:        return {}; // "all": no filter (archived included by default)
+  }
+}
+
+/** Switch the mailbox nav-pane folder. A different folder is a different
+ *  dataset, so the cache + scroll position are reset and the first page is
+ *  re-fetched. The selected conversation is cleared too. */
+function setMailboxFolder(folder) {
+  if (mailboxUi.folder === folder) return;
+  mailboxUi.folder = folder;
+  mailboxUi.messages = [];
+  mailboxUi.cursor = null;
+  mailboxUi.hasMore = false;
+  mailboxUi.selectedKey = "";
+  mailboxUi.error = null;
+  const p = loadMailboxPage();
+  render();          // show the nav highlight + loading state immediately
+  p.then(render);   // then render the new folder's first page
+}
+
+/** Fetch the first page of messages for the mailbox (newest-first), scoped to
+ *  the current nav-pane folder. On the initial load this seeds the cache; on
+ *  a 3s poll refresh it only PREPENDS newly-arrived messages (matched by id)
+ *  so infinite-scroll accumulation below is never clobbered. The next-page
+ *  cursor is preserved across refreshes — it is a stable (ts,id) boundary, so
+ *  even after new mail arrives it still points to the correct older page
+ *  (no gaps, no dupes). */
 async function loadMailboxPage() {
   if (mailboxUi.loading || mailboxUi.loadingMore) return;
   mailboxUi.loading = true;
   mailboxUi.error = null;
   try {
-    const page = await fetchMessages({ limit: 50 });
+    const page = await fetchMessages({ limit: 50, ...mailboxFolderParams(mailboxUi.folder) });
     const fresh = page.messages || [];
     if (!mailboxUi.messages.length) {
       // First load: seed the cache.
@@ -175,7 +205,7 @@ async function loadMoreMailbox() {
   mailboxUi.error = null;
   let added = false;
   try {
-    const page = await fetchMessages({ limit: 50, cursor: mailboxUi.cursor });
+    const page = await fetchMessages({ limit: 50, cursor: mailboxUi.cursor, ...mailboxFolderParams(mailboxUi.folder) });
     const more = page.messages || [];
     const have = new Set(mailboxUi.messages.map((m) => m.id));
     for (const m of more) {

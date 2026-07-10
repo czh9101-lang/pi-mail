@@ -37,6 +37,36 @@ function mailboxRetryRow(msg, onRetry) {
   return row;
 }
 
+/** Pane 1: the folder/navigation pane (Outlook-style). Switching a folder
+ *  scopes the message list to a different /api/messages filter and resets
+ *  the cache (see setMailboxFolder). The conversation-grouped list and
+ *  infinite scroll then work on whatever filtered set is returned. */
+function mailboxNav() {
+  const nav = el("div", "mb-nav");
+  const head = el("div", "mb-nav-head");
+  head.appendChild(el("h2", null, "Mail"));
+  nav.appendChild(head);
+  const list = el("div", "mb-nav-list");
+  // Inbox carries the human-inbox unread count as a badge (Outlook touch).
+  const unread = state.messages?.unread || 0;
+  const folders = [
+    { id: "all", ico: "💬", label: "All mail" },
+    { id: "inbox", ico: "📥", label: "Inbox", count: unread },
+    { id: "sent", ico: "📨", label: "Sent" },
+    { id: "archive", ico: "🗄", label: "Archive" },
+  ];
+  for (const f of folders) {
+    const item = el("div", "mb-nav-item" + (mailboxUi.folder === f.id ? " active" : ""));
+    item.appendChild(el("span", "mb-nav-ico", f.ico));
+    item.appendChild(el("span", "mb-nav-lbl", f.label));
+    if (f.count) item.appendChild(el("span", "mb-nav-count", String(f.count)));
+    item.addEventListener("click", () => setMailboxFolder(f.id));
+    list.appendChild(item);
+  }
+  nav.appendChild(list);
+  return nav;
+}
+
 function renderMailbox() {
   // Preserve the conversation-list scroll position across the 3s poll
   // re-render so infinite-scroll position isn't yanked back to the top when
@@ -46,7 +76,10 @@ function renderMailbox() {
   main.innerHTML = "";
   const grid = el("div", "mb-grid");
 
-  // ── Left pane: conversation list ──────────────────────────────────────
+  // ── Pane 1: folder/navigation (Outlook-style nav) ───────────────────────
+  grid.appendChild(mailboxNav());
+
+  // ── Pane 2: conversation/message list ───────────────────────────────────
   const left = el("div", "mb-left");
   const leftHead = el("div", "mb-left-head");
   leftHead.appendChild(el("h2", null, "Conversations"));
@@ -104,7 +137,10 @@ function renderMailbox() {
     } else if (mailboxUi.error) {
       convList.appendChild(mailboxRetryRow(mailboxUi.error, () => { loadMailboxPage().then(render); }));
     } else {
-      convList.appendChild(el("div", "empty", mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads."));
+      const emptyText = mailboxUi.showInterAgent ? "No messages."
+        : (mailboxUi.folder === "all" ? "No conversations yet. Toggle inter-agent messages to see agent↔agent threads."
+           : "No messages in this folder.");
+      convList.appendChild(el("div", "empty", emptyText));
     }
   }
   for (const c of convs) {
@@ -188,7 +224,7 @@ function renderMailbox() {
         compose.subject = (m.subject || "").startsWith("Re:") ? m.subject : "Re: " + (m.subject || "");
         compose.body = "";
         syncHash(); renderMailbox();
-        const ta = right.querySelector(".compose textarea"); if (ta) ta.focus();
+        const ta = right.querySelector(".compose textarea"); if (ta) { ta.focus(); ta.scrollIntoView({ block: "center" }); }
       });
       const archiveBtn = el("button", "btn secondary", "Archive");
       archiveBtn.addEventListener("click", async () => { await post("/api/archive", { id: m.id }); refresh(); });

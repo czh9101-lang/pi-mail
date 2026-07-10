@@ -90,9 +90,12 @@ pairing in the terminal, the agent stays in the terminal.
    status, context saturation, model, uptime, id. Auto-refreshes every 3 s.
 2. **Board** — kanban task board, optionally two-way synced with your current
    Jira sprint. See [Task board](#task-board).
-3. **My Mailbox** — your inbox (mail addressed to `human`, archiveable), your
-   outbox (mail you sent, with broadcasts grouped), and a compose form to send
-   to a named agent or broadcast to all.
+3. **Mailbox** — an Outlook-style three-pane view: a folder/navigation
+   pane (All mail · Inbox · Sent · Archive), a conversation list (grouped per
+   correspondent, with inter-agent threads togglable), and a reading pane
+   showing the selected thread with reply/archive actions and a compose form.
+   Messages load incrementally via infinite scroll; the 3 s poll prepends new
+   mail without resetting your scroll position.
 4. **History** — pick any agent and see the full history of mail delivered to
    it (direct + broadcast, including archived messages).
 
