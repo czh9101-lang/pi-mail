@@ -356,9 +356,9 @@ entry. No daemon-spawned session in this hierarchy can outlive its pass.
 ## Board MCP server
 
 The MCP server is hosted **inside the pi-mail daemon** itself — it serves
-`POST /mcp` on the daemon's existing HTTP UI port (default `1994`) over the
-**Streamable HTTP** transport, backed by an **in-process** board backend that
-calls the daemon's board functions directly. No separate process, no HTTP
+`/mcp` (GET / POST / DELETE) on the daemon's existing HTTP UI port (default
+`1994`) over the **Streamable HTTP** transport, backed by an **in-process**
+board backend that calls the daemon's board functions directly. No separate process, no HTTP
 loopback: the daemon, the web UI, the WebSocket terminal, and the MCP server
 all live in one. A `--stdio` bridge (`mcp/build/index.js`) remains for MCP
 clients that prefer to spawn the server as a subprocess.
@@ -397,9 +397,16 @@ npm install
 npm run build:mcp                 # tsc → mcp/build/ (daemon imports mcp/build/board-mcp.js)
 ```
 
-The daemon serves `POST /mcp` on its UI port (`PI_MAIL_UI_HOST`/
-`PI_MAIL_UI_PORT`, default `0.0.0.0:1994`). Stateful SSE streams and sessions
-are not supported (stateless server — `POST` only). The SDK + compiled
+The daemon serves `/mcp` on its UI port (`PI_MAIL_UI_HOST`/
+`PI_MAIL_UI_PORT`, default `0.0.0.0:1994`). The server is **stateless** — a
+fresh `McpServer` + transport per request, no session id — but handles the
+full Streamable HTTP method surface: `POST` carries JSON-RPC, `GET` opens a
+standalone SSE stream (`406` unless the client sends `Accept: text/event-stream`),
+and `DELETE`/other methods get a `405` with `Allow: GET, POST, DELETE`. Method
+dispatch is delegated to the SDK transport, so a client doing the GET/SSE
+handshake gets a `200 text/event-stream` (held open as a keep-alive; the board
+server pushes nothing over it) instead of a `405`. Stateful sessions and
+server-initiated push are not supported. The SDK + compiled
 `mcp/build/board-mcp.js` are imported lazily, so the daemon still runs if the
 MCP build or its npm deps are absent (`/mcp` answers `503` in that case).
 

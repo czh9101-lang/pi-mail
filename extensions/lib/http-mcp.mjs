@@ -9,8 +9,11 @@
  * MCP build or its npm deps are absent (graceful 503 on /mcp in that case).
  *
  * Stateless mode: a fresh McpServer + transport per request (the stateless
- * Streamable HTTP transport is single-use — see SDK docs). Board operations run
- * as the human agent, same as the web UI and the socket protocol's board_*
+ * Streamable HTTP transport is single-use — see SDK docs). Method dispatch
+ * (POST = JSON-RPC, GET = standalone SSE stream, DELETE = session close,
+ * anything else = 405 with Allow: GET, POST, DELETE) is delegated to the SDK
+ * transport, so the daemon does not gate on method itself. Board operations
+ * run as the human agent, same as the web UI and the socket protocol's board_*
  * cases.
  */
 import path from "node:path";
@@ -137,8 +140,10 @@ function jsonRpcError(res, httpStatus, code, message) {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
-/** Handle a POST /mcp request using the in-process backend. Stateless: a
- *  fresh McpServer + transport per request. */
+/** Handle a /mcp request (any method — POST/GET/DELETE/…) using the in-process
+ *  backend. Stateless: a fresh McpServer + transport per request. `parsedBody`
+ *  is only meaningful for POST (pre-parsed by the caller to enforce the size
+ *  guard); pass undefined for non-POST. */
 export async function handleMcpRequest(req, res, parsedBody) {
   let deps;
   try {

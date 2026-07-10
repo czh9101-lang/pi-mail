@@ -373,14 +373,19 @@ export function createHttpServer({ uiHtml, uiAssets }) {
     }
 
     // ── MCP server (Streamable HTTP) — hosted in-process, no separate proc ─
-    // POST /mcp is the MCP Streamable HTTP transport. Stateless: POST only
-    // (no SSE / no session). Backed by the in-process board backend (http-mcp.mjs).
+    // The MCP Streamable HTTP transport is served at /mcp for the full method
+    // surface: POST carries JSON-RPC requests, GET opens a standalone SSE
+    // stream (server→client notifications; 406 if the client doesn't Accept
+    // text/event-stream), DELETE ends a session. Method dispatch + header
+    // validation (incl. the 405 Allow: GET, POST, DELETE for unsupported
+    // methods) is delegated to the SDK transport — we only pre-parse the POST
+    // body (to enforce the size guard). Stateless: a fresh McpServer +
+    // transport per request, no session id (http-mcp.mjs). The GET stream is
+    // held open until the client disconnects; the board server pushes nothing
+    // over it (no subscriptions), so it is a spec-compliant keep-alive that
+    // satisfies clients requiring the GET handshake rather than a 405.
     if (url.pathname === "/mcp") {
-      if (req.method !== "POST") {
-        jsonRpcError(res, 405, -32000, `Method not allowed: ${req.method} (stateless server; use POST)`);
-        return;
-      }
-      const body = await readJsonBody(req);
+      const body = req.method === "POST" ? await readJsonBody(req) : undefined;
       await handleMcpRequest(req, res, body);
       return;
     }

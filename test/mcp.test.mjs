@@ -163,9 +163,25 @@ test("tools/list exposes the board tools", async () => {
   }
 });
 
-test("GET /mcp is rejected (stateless server, POST only)", async () => {
+test("GET /mcp without Accept: text/event-stream is 406 (not 405)", async () => {
+  // The SDK transport (not the daemon) now handles method dispatch. A GET that
+  // doesn't advertise text/event-stream gets a proper 406 — proving the request
+  // reached the SDK instead of being 405'd at the method gate.
   const res = await fetch(`http://127.0.0.1:${port}/mcp`);
-  assert.equal(res.status, 405);
+  assert.equal(res.status, 406);
+});
+
+test("GET /mcp with Accept: text/event-stream opens an SSE stream", async () => {
+  // The Streamable HTTP GET handshake: the server MUST NOT 405 this. It opens
+  // a long-lived text/event-stream the client can hold for server→client
+  // notifications (the board server pushes none — it's a keep-alive).
+  const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    headers: { Accept: "text/event-stream" },
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") || "", /text\/event-stream/);
+  // Don't hold the stream open — cancel to let the test proceed.
+  await res.body?.cancel();
 });
 
 // ── board tool calls (in-process backend → live board state) ───────────────
