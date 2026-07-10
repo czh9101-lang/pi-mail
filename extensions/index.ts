@@ -1,28 +1,14 @@
 /**
- * pi-mail — federated agent mail extension
+ * pi-mail — federated agent mail extension.
  *
- * Registers each pi process as an agent in a shared mail federation.
- * A singleton daemon (daemon.mjs) is auto-started when needed.
+ * Registers each pi process as an agent in a shared mail federation; a singleton
+ * daemon (daemon.mjs) is auto-started when needed. Unread mail is injected as
+ * context at the start of each turn; the status bar shows the unread count.
+ * Clean exit unregisters + clears mailbox; crashes preserve it for reconnect.
  *
- * Features:
- *   - Agents discover each other via the daemon registry
- *   - Mail can be sent to a named agent or broadcast to all
- *   - Unread mail is injected as context at the start of each turn
- *   - Status bar shows unread count
- *   - Clean exit unregisters and clears mailbox; crashes preserve it for reconnect
- *
- * Commands:
- *   /mail-name [name]   — view or set your agent display name
- *   /mail-status        — show connection status
- *
- * Tools (callable by the LLM):
- *   mail_list           — list inbox
- *   mail_read           — read a message by ID
- *   mail_send           — send to a named agent
- *   mail_broadcast      — send to all connected agents
- *   mail_mark_read      — archive (remove) a message
- *   mail_list_agents    — list connected agents
- *   mail_restart_daemon — restart the shared mail daemon
+ * Commands: /mail-name [name], /mail-status.
+ * Tools: mail_list, mail_read, mail_send, mail_broadcast, mail_mark_read,
+ *        mail_list_agents, mail_restart_daemon (board + spawn tools in lib/).
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -36,8 +22,11 @@ import { MailClient, projectGroupKey } from "./lib/mail-client.js";
 import { ensureDaemonAndConnect, isDaemonAlive, sleep } from "./lib/daemon-bootstrap.js";
 import { registerCommands } from "./lib/commands.js";
 import { registerMailTools } from "./lib/mail-tools.js";
-import { registerBoardAndSpawnTools } from "./lib/board-tools.js";
-import type { MailMessage, AgentInfo } from "./lib/mail-client.js";
+import { registerBoardReadTools } from "./lib/board-read-tools.js";
+import { registerBoardTools } from "./lib/board-tools.js";
+import { registerSpawnTools } from "./lib/spawn-tools.js";
+import { buildBeforeStartGuidance, formatIncomingMailContent, renderMailStatus } from "./lib/mail-injection.js";
+import type { MailMessage } from "./lib/mail-client.js";
 
 // jiti provides __dirname for directory-based extensions
 declare const __dirname: string;
@@ -115,20 +104,7 @@ export default function (pi: ExtensionAPI) {
   function updateStatus(ctx?: ExtensionContext | null): void {
     const c = ctx ?? latestCtx;
     if (!c) return;
-    if (!connected) {
-      c.ui.setStatus("pi-mail", c.ui.theme.fg("dim", "✉ offline"));
-      return;
-    }
-    const unread = mailbox.filter((m) => !m.read).length;
-    if (unread > 0) {
-      const badge = c.ui.theme.fg("accent", `📬 ${unread}`);
-      const name = c.ui.theme.fg("dim", ` ${agentName}`);
-      c.ui.setStatus("pi-mail", badge + name);
-    } else {
-      const icon = c.ui.theme.fg("dim", "✉");
-      const name = c.ui.theme.fg("dim", ` ${agentName}`);
-      c.ui.setStatus("pi-mail", icon + name);
-    }
+    renderMailStatus(c, { connected, mailbox, agentName });
   }
 
   // ── Connection management ───────────────────────────────────────────────────
@@ -200,23 +176,7 @@ export default function (pi: ExtensionAPI) {
             return;
           }
 
-          const time = new Date(msg.timestamp).toLocaleString();
-          const header = msg.broadcast
-            ? `📡 **Broadcast** from **${msg.fromName}** (${msg.fromId.slice(0, 8)}): "${msg.subject}"`
-            : `📬 **Mail** from **${msg.fromName}** (${msg.fromId.slice(0, 8)}): "${msg.subject}"`;
-          const footer = msg.broadcast
-            ? `This is a broadcast message. Only take action if this concerns you.`
-            : `Please handle this mail and use \`mail_mark_read\` to archive it when done. ` +
-              `This is a mail-driven task: the operator is not at your TUI. ` +
-              `When complete (or if you have a question), reply to **${msg.fromName}** via \`mail_send\` — do NOT use \`ask_user_question\`.`;
-          const content = [
-            header,
-            `Date: ${time} | ID: ${msg.id.slice(0, 8)}`,
-            ``,
-            msg.body,
-            ``,
-            footer,
-          ].join("\n");
+          const content = formatIncomingMailContent(msg);
           pi.sendMessage(
             { customType: "pi-mail", content, display: true },
             { deliverAs: "steer", triggerTurn: true }
@@ -387,74 +347,10 @@ export default function (pi: ExtensionAPI) {
 
     if (!connected) return;
 
-    // Always nudge the agent (per task) to maintain an identity + status so an
-    // orchestrator can tell who is doing what. This lives in the systemPrompt
-    // only — no visible message — to avoid noise on every turn.
-    const identityGuidance =
-      `\n\n## Mail Federation\n` +
-      `You are part of a federated agent network (pi-mail). An orchestrator and other agents can see you via mail_list_agents.\n` +
-      `- Your display name: "${agentName}"${nameCustomized ? "" : " (auto-generated slug — set a short descriptive name with mail_set_name)"}.\n` +
-      `- Your current status: ${agentStatus ? `"${agentStatus}"` : "(not set)"}.\n` +
-      `\n**Status rules — follow these strictly:**\n` +
-      `1. When you start a task: set status to a one-line description, e.g. "implementing auth refactor in portal-web".\n` +
-      `2. When you finish or go idle: set status to "idle" or clear it.\n` +
-      `3. Update status whenever your focus shifts to something meaningfully different.\n` +
-      `4. Keep it short (<60 chars) and factual — branch name, issue key, and action are ideal.\n` +
-      `Do NOT skip status updates — the orchestrator relies on them to coordinate work.\n` +
-      `\nThe federation also has a shared kanban task board (optionally synced two-way with a Jira sprint). ` +
-      `Tools: board_list_tasks, board_get_task, board_move_task, board_comment_task, board_progress_task, board_assign_task, board_create_task, board_split_task, board_update_task, board_flag_task. ` +
-      `If a task is assigned to you (you'll get it as mail), work it via these tools: move it as you progress, post progress updates (board_progress_task) before moving it onward, comment on findings, and follow any column instructions. ` +
-      `If a task is unclear, flag it with board_flag_task (with your questions) instead of guessing; if it's too big, subdivide it with board_split_task. A daemon nudge will mail you if an in-progress task of yours goes quiet for a while — reply with board_progress_task.`;
-
-    // Tell the agent which channel the current task arrived on, so it knows
-    // whether to reply via mail (operator/agent not at the TUI) or respond in
-    // place. mailTaskSender is set when a mail triggers the turn and cleared
-    // when the operator types directly in the TUI (see the `input` handler).
-    const channelGuidance = mailTaskSender
-      ? (
-        `\n\n## Current task channel: mail\n` +
-        `This task was dispatched to you via pi-mail from "${mailTaskSender.name}" (${mailTaskSender.id.slice(0, 8)}). ` +
-        `The operator is NOT sitting at your TUI — they only see output you send as mail.\n` +
-        `- When the task is complete: reply with \`mail_send\` to "${mailTaskSender.name}" with a concise summary, then archive the original with \`mail_mark_read\`.\n` +
-        `- If you have a question or hit a blocker: ask via \`mail_send\` to "${mailTaskSender.name}". Do NOT use the \`ask_user_question\` tool — there is no one at the TUI to answer it.\n` +
-        (mailTaskSender.name === "human"
-          ? `- "human" is the operator via the web UI; replies to "human" appear in their inbox.\n`
-          : `- "${mailTaskSender.name}" is another agent in the federation.\n`)
-      )
-      : (
-        `\n\n## Current task channel: direct (TUI)\n` +
-        `The operator is communicating with you directly over the TUI. Do NOT send mail (\`mail_send\` / \`mail_broadcast\`) to report on this task — respond here directly. ` +
-        `You may use the \`ask_user_question\` tool when you need clarification. ` +
-        `Only reach for the mail tools if you are participating in a federated multi-agent workflow (see the mail-orchestrator skill).`
-      );
-
     const unread = mailbox.filter((m) => !m.read);
-    if (unread.length === 0) {
-      return { systemPrompt: event.systemPrompt + identityGuidance + channelGuidance };
-    }
-
-    const plural = unread.length === 1 ? "" : "s";
-    const broadcasts = unread.filter((m) => m.broadcast);
-    const broadcastNote = broadcasts.length > 0
-      ? ` (${broadcasts.length} of which ${broadcasts.length === 1 ? "is" : "are"} a broadcast — only act on those if they concern you)`
-      : "";
-    return {
-      message: {
-        customType: "pi-mail",
-        content:
-          `📬 You have **${unread.length}** unread mail message${plural}${broadcastNote}. ` +
-          `Use \`mail_list\` to see your inbox, \`mail_read\` to read, ` +
-          `\`mail_send\` to reply, \`mail_broadcast\` to reach all agents, ` +
-          `and \`mail_mark_read\` to archive.`,
-        display: true,
-      },
-      systemPrompt:
-        event.systemPrompt +
-        identityGuidance +
-        channelGuidance +
-        `\n\nYou currently have ${unread.length} unread mail message${plural}${broadcastNote}. ` +
-        `Check your inbox with mail_list when relevant to the current task.`,
-    };
+    return buildBeforeStartGuidance(event.systemPrompt, {
+      agentName, nameCustomized, agentStatus, mailTaskSender, unread,
+    });
   });
 
   // Keep agentModel in sync whenever the model changes
@@ -484,5 +380,7 @@ export default function (pi: ExtensionAPI) {
   // live client/connection state (st is getter-backed over the closure vars).
   registerCommands(pi, st);
   registerMailTools(pi, st);
-  registerBoardAndSpawnTools(pi, st);
+  registerBoardReadTools(pi, st);
+  registerBoardTools(pi, st);
+  registerSpawnTools(pi, st);
 }

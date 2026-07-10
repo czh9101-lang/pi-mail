@@ -141,6 +141,11 @@ const UI_ASSETS = {
   "/ui.css": fs.readFileSync(path.join(UI_DIR, "ui.css"), "utf8"),
   "/ui-core.js": fs.readFileSync(path.join(UI_DIR, "ui-core.js"), "utf8"),
   "/ui-board.js": fs.readFileSync(path.join(UI_DIR, "ui-board.js"), "utf8"),
+  "/ui-board-modal.js": fs.readFileSync(path.join(UI_DIR, "ui-board-modal.js"), "utf8"),
+  "/ui-board-settings.js": fs.readFileSync(path.join(UI_DIR, "ui-board-settings.js"), "utf8"),
+  "/ui-spawn.js": fs.readFileSync(path.join(UI_DIR, "ui-spawn.js"), "utf8"),
+  "/ui-terminal.js": fs.readFileSync(path.join(UI_DIR, "ui-terminal.js"), "utf8"),
+  "/ui-mailbox.js": fs.readFileSync(path.join(UI_DIR, "ui-mailbox.js"), "utf8"),
   "/ui-app.js": fs.readFileSync(path.join(UI_DIR, "ui-app.js"), "utf8"),
 };
 

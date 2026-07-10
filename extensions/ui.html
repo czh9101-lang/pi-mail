@@ -26,11 +26,17 @@
 <main id="main"></main>
 <div id="toast" class="toast hidden"></div>
 
-<!-- Split for readability (each file ≤600 lines). Classic scripts share the
+<!-- Split for readability (each file ≤400 lines). Classic scripts share the
      global lexical scope, so top-level let/const/function are visible across
-     files. Order matters: core state/helpers → board+spawn+terminal → app. -->
+     files. Order matters: core state/helpers → board (cards/modal/settings)
+     → spawn+terminal → mailbox → app (tab renderers + routing bootstrap). -->
 <script src="/ui-core.js"></script>
 <script src="/ui-board.js"></script>
+<script src="/ui-board-modal.js"></script>
+<script src="/ui-board-settings.js"></script>
+<script src="/ui-spawn.js"></script>
+<script src="/ui-terminal.js"></script>
+<script src="/ui-mailbox.js"></script>
 <script src="/ui-app.js"></script>
 </body>
 </html>

@@ -1,163 +1,49 @@
 // Tests for the agent-spawn feature (board subtask 4ab67b6b / task 1c582a88).
 //
-// Runs a fully isolated mail-daemon: a throwaway HOME (so the socket + spawn
-// registry live in a temp dir), a fake `tmux` bin that records has/new/kill-
-// session against a state dir, a free UI port, and a short spawn register
-// timeout. Everything is driven over the daemon socket — no real tmux/pi is
-// spawned and nothing touches the operator's ~/.pi.
+// Runs a fully isolated mail-daemon via test/helpers/spawn-harness.mjs (fake
+// `tmux`, throwaway HOME, short register timeout). Everything is driven over the
+// daemon socket — no real tmux/pi is spawned and nothing touches ~/.pi.
 //
 // Run: npm test   (uses node:test, the stdlib runner — no new dependency)
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn as pSpawn } from "node:child_process";
-import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
+import {
+  mkFakeTmux,
+  startDaemon,
+  stopDaemon,
+  mkClient,
+  register as harnessRegister,
+} from "./helpers/spawn-harness.mjs";
 
-const REPO = path.resolve(import.meta.dirname, "..");
-const DAEMON = path.join(REPO, "extensions", "daemon.mjs");
-
-// ── Isolation harness ──────────────────────────────────────────────────────
+// ── Isolation harness state (owned here; helper fns are stateless) ──────────
 
 let tmpHome, tmpState, fakeTmux, proc, sockPath, client;
 // Kill any spawned daemon when the test runner exits (incl. Ctrl-C / timeout)
 // so interrupted runs don't leave orphan daemon processes behind.
 process.on("exit", () => { try { if (proc) proc.kill("SIGKILL"); } catch {} });
 
-function mkFakeTmux() {
-  // A tmux stand-in. `new-session` records the session; `has-session` reports
-  // it; `kill-session` removes it. The actual command tmux would run (pi) is
-  // ignored — we never launch a real agent.
-  const script = `#!/bin/sh
-STATE="$TMUX_STATE_DIR"
-case "$1" in
-  has-session)
-    name="$3"
-    [ -f "$STATE/sessions/$name" ] && exit 0 || exit 1 ;;
-  new-session)
-    name=""
-    while [ $# -gt 0 ]; do
-      case "$1" in -s) name="$2"; shift 2 ;; *) shift ;; esac
-    done
-    mkdir -p "$STATE/sessions"
-    touch "$STATE/sessions/$name"
-    exit 0 ;;
-  kill-session)
-    name="$3"
-    rm -f "$STATE/sessions/$name"
-    exit 0 ;;
-  *)
-    exit 0 ;;
-esac
-`;
-  fs.writeFileSync(fakeTmux, script, { mode: 0o755 });
-}
-
-function startDaemon() {
-  return new Promise((resolve, reject) => {
-    proc = pSpawn(process.execPath, [DAEMON], {
-      env: {
-        ...process.env,
-        HOME: tmpHome,                 // socket + registry land in tmpHome/.pi/agent
-        PI_MAIL_TMUX_BIN: fakeTmux,
-        PI_MAIL_PI_BIN: "/bin/true",   // never actually run (fake tmux ignores it)
-        PI_MAIL_UI_PORT: "0",          // OS-picked UI port; we don't use the UI here
-        PI_MAIL_UI_HOST: "127.0.0.1",
-        PI_MAIL_SPAWN_TIMEOUT: "1500", // fast register-wait for the timeout test
-        TMUX_STATE_DIR: tmpState,
-        PATH: `${path.dirname(fakeTmux)}:${process.env.PATH}`,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    proc.stderr.on("data", (c) => { stderr += c.toString(); });
-    proc.on("exit", (code, sig) => {
-      if (!proc.__stopped) console.error("daemon exited unexpectedly", code, sig, stderr.slice(-500));
-    });
-    // Wait for the socket to appear, then resolve.
-    const tryConnect = (retries = 0) => {
-      const s = net.createConnection(sockPath);
-      s.once("connect", () => { s.destroy(); resolve(); });
-      s.once("error", () => {
-        if (retries > 200) return reject(new Error("daemon socket never appeared\n" + stderr));
-        setTimeout(() => tryConnect(retries + 1), 30);
-      });
-    };
-    tryConnect();
-  });
-}
-
-function stopDaemon() {
-  if (!proc) return Promise.resolve();
-  proc.__stopped = true;
-  return new Promise((r) => {
-    proc.once("exit", () => { proc = null; r(); });
-    proc.kill("SIGTERM");
-    setTimeout(() => { if (proc) { proc.kill("SIGKILL"); proc = null; } r(); }, 3000);
-  });
-}
-
-// Minimal newline-delimited JSON socket client (matches the extension).
-function mkClient() {
-  return new Promise((resolve, reject) => {
-    const s = net.createConnection(sockPath);
-    s.setEncoding("utf8");
-    let buf = "";
-    let nextId = 1;
-    const pending = new Map();
-    const onNewMail = [];
-    s.on("data", (chunk) => {
-      buf += chunk;
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let m; try { m = JSON.parse(line); } catch { continue; }
-        if (m.type === "ping") { s.write(JSON.stringify({ type: "pong" }) + "\n"); continue; }
-        if (m.type === "new_mail") { onNewMail.forEach((cb) => cb(m.message)); continue; }
-        if (m._reqId != null && pending.has(m._reqId)) {
-          const e = pending.get(m._reqId); clearTimeout(e.t); pending.delete(m._reqId); e.res(m);
-        }
-      }
-    });
-    s.once("connect", () => resolve({
-      request(msg, timeoutMs = 5000) {
-        const id = nextId++;
-        return new Promise((res, rej) => {
-          const t = setTimeout(() => { pending.delete(id); rej(new Error("timeout: " + msg.type)); }, timeoutMs);
-          pending.set(id, { res, rej, t });
-          s.write(JSON.stringify({ ...msg, _reqId: id }) + "\n");
-        });
-      },
-      onNewMail(cb) { onNewMail.push(cb); },
-      close() { s.destroy(); },
-    }));
-    s.once("error", reject);
-  });
-}
-
-// Register as an agent (required before board/spawn RPCs).
-async function register(c, name, cwd = tmpHome) {
-  return c.request({ type: "register", agentId: crypto.randomUUID(), agentName: name, cwd });
-}
+// Local register wrapper: defaults cwd to tmpHome (matches the original harness).
+const register = (c, name, cwd = tmpHome) => harnessRegister(c, name, cwd);
 
 before(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "pimail-home-"));
   tmpState = fs.mkdtempSync(path.join(os.tmpdir(), "pimail-tmux-"));
   fakeTmux = path.join(tmpHome, "fake-tmux");
-  mkFakeTmux();
+  mkFakeTmux(fakeTmux);
   sockPath = path.join(tmpHome, ".pi", "agent", "mail-daemon.sock");
-  await startDaemon();
-  client = await mkClient();
+  proc = await startDaemon({ tmpHome, tmpState, fakeTmux, sockPath });
+  client = await mkClient(sockPath);
   await register(client, "test-orchestrator");
 });
 
 after(async () => {
   client?.close();
-  await stopDaemon();
+  await stopDaemon(proc);
   fs.rmSync(tmpHome, { recursive: true, force: true });
   fs.rmSync(tmpState, { recursive: true, force: true });
 });
@@ -240,7 +126,7 @@ test("kickoff is delivered once the spawned name registers", async () => {
   // kickoff mail (waitForRegistration resolves → sendMail with newSession:true).
   const kickoff = "trivial: reply 'ok' then stop";
   await spawn(client, { cwd: tmpHome, name: "will-register", kickoff });
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
   await register(worker, "will-register");
   const got = await mail;
@@ -264,7 +150,7 @@ test("mm:true spawn with no kickoff injects the MM pass kickoff", async () => {
   await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
   const r = await client.request({ type: "spawn", cwd: tmpHome, name: "ceo-spawned-mm", mm: true });
   assert.equal(r.type, "spawned", `mm spawn failed: ${JSON.stringify(r)}`);
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
   await register(worker, "ceo-spawned-mm");
   const got = await mail;
@@ -284,7 +170,7 @@ test("ceo:true spawn with no kickoff injects the CEO pass kickoff", async () => 
   await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
   const r = await client.request({ type: "spawn", cwd: tmpHome, name: "op-spawned-ceo", ceo: true });
   assert.equal(r.type, "spawned", `ceo spawn failed: ${JSON.stringify(r)}`);
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
   await register(worker, "op-spawned-ceo");
   const got = await mail;
@@ -298,7 +184,7 @@ test("explicit kickoff wins over the injected mm/ceo kickoff", async () => {
   await client.request({ type: "spawn_favorite", cwd: tmpHome, favorite: true });
   const r = await client.request({ type: "spawn", cwd: tmpHome, name: "explicit-kickoff-mm", mm: true, kickoff: "CUSTOM: do the thing" });
   assert.equal(r.type, "spawned");
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   const mail = new Promise((res) => worker.onNewMail((m) => res(m)));
   await register(worker, "explicit-kickoff-mm");
   const got = await mail;
@@ -356,10 +242,10 @@ test("survival: spawned session survives a daemon restart", async () => {
   const r = await spawn(client, { cwd: tmpHome, name: "survivor" });
   assert.equal(r.type, "spawned");
   client.close();
-  await stopDaemon();
+  await stopDaemon(proc);
   // Restart with the SAME HOME/env so the registry + fake-tmux state persist.
-  await startDaemon();
-  client = await mkClient();
+  proc = await startDaemon({ tmpHome, tmpState, fakeTmux, sockPath });
+  client = await mkClient(sockPath);
   await register(client, "test-orchestrator-2");
   const st = await spawnState(client);
   const s = st.sessions.find((x) => x.name === "survivor");
@@ -385,7 +271,7 @@ test("spawn_ls lists a directory (allowlist removed)", async () => {
 // ── no mail / board regression (spawn feature must not break core RPCs) ──────
 
 test("regression: mail send + list still works", async () => {
-  const w = await mkClient();
+  const w = await mkClient(sockPath);
   await register(w, "regression-worker");
   const got = new Promise((res) => w.onNewMail((m) => res(m)));
   const r = await client.request({ type: "send", to: "regression-worker", subject: "regression", body: "hello" });
@@ -414,7 +300,7 @@ test("regression: board state still works", async () => {
 test("spawn registry links the agentId once the agent registers under the session name", async () => {
   const agentId = crypto.randomUUID();
   await spawn(client, { cwd: tmpHome, name: "linker", kickoff: "hi" });
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   // The fixed extension adopts `pi -n linker` as its agent name, so it
   // registers under "linker" — matching the tmux session name.
   await worker.request({ type: "register", agentId, agentName: "linker", cwd: tmpHome });
@@ -433,7 +319,7 @@ test("registry agentId stays empty when the agent registers under a different na
   // auto-slug (`<dir>-<ownUUID6>`), so the daemon could never resolve the
   // session name to a registered agent — the link stayed broken.
   await spawn(client, { cwd: tmpHome, name: "mismatch-session", kickoff: "hi" });
-  const worker = await mkClient();
+  const worker = await mkClient(sockPath);
   await register(worker, "mismatch-auto-slug"); // a DIFFERENT name than the session
   await new Promise((r) => setTimeout(r, 700));
   const st = await spawnState(client);

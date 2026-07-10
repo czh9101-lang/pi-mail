@@ -16,13 +16,19 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { AGENT_DIR, HUMAN_AGENT_ID, log, sendMail, resolveTarget, shellQuote, agents } from "./core.mjs";
+import {
+  TMUX_BIN,
+  validateSpawnCwd,
+  safeSessionName,
+  defaultSpawnName,
+  tmuxSessionExists,
+  listSpawnDir,
+} from "./spawn-utils.mjs";
 
 const SPAWN_FILE = path.join(AGENT_DIR, "mail-spawn.json");
 const PI_BIN = process.env.PI_MAIL_PI_BIN || "pi";
-const TMUX_BIN = process.env.PI_MAIL_TMUX_BIN || "tmux";
 // How long to wait for a freshly-spawned agent to register with the daemon
 // before returning (the agent keeps running regardless; this only gates the
 // synchronous "is it up yet?" answer + the kickoff delivery).
@@ -97,46 +103,8 @@ function loadSpawn() {
   }
 }
 
-/** Resolve and validate a cwd: must be a real directory anywhere on the
- *  filesystem. The picker can browse and spawn from any path — there is no
- *  allowlist (the former "allowed root" restriction was removed). */
-function validateSpawnCwd(cwd) {
-  if (!cwd || typeof cwd !== "string") return { error: "cwd is required" };
-  let resolved;
-  try {
-    resolved = path.resolve(cwd);
-  } catch {
-    return { error: `invalid path: ${cwd}` };
-  }
-  let st;
-  try {
-    st = fs.statSync(resolved);
-  } catch {
-    return { error: `not a directory: ${resolved}` };
-  }
-  if (!st.isDirectory()) return { error: `not a directory: ${resolved}` };
-  return { resolved };
-}
-
-/** Sanitise a name for use as a tmux session name (tmux disallows '.' and ':'). */
-function safeSessionName(name) {
-  return String(name || "").replace(/[.:\\]/g, "-").replace(/\s+/g, "-").slice(0, 80);
-}
-
-/** Default agent name: <dir-basename>-<id6>, matching the extension's auto-slug. */
-function defaultSpawnName(cwd) {
-  const base = path.basename(cwd) || "pi-agent";
-  return `${base}-${crypto.randomUUID().slice(0, 6)}`;
-}
-
-function tmuxSessionExists(name) {
-  try {
-    const r = spawnSync(TMUX_BIN, ["has-session", "-t", name]);
-    return r.status === 0;
-  } catch {
-    return false;
-  }
-}
+// (validateSpawnCwd, safeSessionName, defaultSpawnName, tmuxSessionExists, and
+// listSpawnDir moved to spawn-utils.mjs — imported above.)
 
 /**
  * Spawn a fresh pi agent in a tmux session.
@@ -370,24 +338,7 @@ function projectsState() {
   };
 }
 
-/** Directory listing for the picker: subdirectories of `dir` (any path on the
- *  filesystem). validateSpawnCwd only checks it's a real directory. When
- *  `hidden` is true, dot-directories (e.g. .git, .config) are included too. */
-function listSpawnDir(dir, { hidden = false } = {}) {
-  const v = validateSpawnCwd(dir);
-  if (v.error) return { error: v.error };
-  const resolved = v.resolved;
-  try {
-    const entries = fs.readdirSync(resolved, { withFileTypes: true });
-    const dirs = entries
-      .filter((e) => e.isDirectory() && (hidden || !e.name.startsWith(".")))
-      .map((e) => ({ name: e.name, path: path.join(resolved, e.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return { dir: resolved, dirs };
-  } catch (e) {
-    return { error: `could not read ${resolved}: ${e?.message ?? String(e)}` };
-  }
-}
+// (listSpawnDir moved to spawn-utils.mjs)
 
 /** Spawned sessions, for the UI/tools: name + cwd + model + live status, plus
  *  the recent/favorite projects registry. */
@@ -414,12 +365,13 @@ export {
   stopAgent,
   stopSelf,
   spawnState,
-  listSpawnDir,
   spawnRegistry,
-  safeSessionName,
-  tmuxSessionExists,
   recordProject,
   setFavorite,
   projectsState,
   schedulePersistSpawn,
 };
+
+// Re-export the shared path/tmux helpers so existing importers (http-terminal,
+// protocol, etc.) keep working without changing their import source.
+export { safeSessionName, tmuxSessionExists, listSpawnDir };
