@@ -268,3 +268,49 @@ test("total reflects the filtered set, not the whole log", async () => {
   assert.equal(page.total, 1, "only bob→human");
   assert.equal(page.messages[0].fromName, "bob");
 });
+
+// ── Infinite-scroll + live-refresh contract (task 276b3643) ───────────────────
+// The mailbox UI loads page 1, appends older pages on scroll, and on the 3s
+// poll refresh re-fetches ONLY page 1 (prepending new mail) while keeping the
+// accumulated older pages and the stored next-page cursor. That design is only
+// correct if a cursor obtained before new mail arrived still points at the
+// strictly-older page afterwards — i.e. new mail never creates a gap or a
+// duplicate relative to the already-loaded window. This test pins that.
+test("a cursor stays valid after new mail arrives (infinite-scroll live-refresh)", async () => {
+  // 1. Load page 1 + one load-more → accumulate the 4 newest of the original set.
+  const p1 = await httpGet("/api/messages?limit=2");
+  const p2 = await httpGet(`/api/messages?limit=2&cursor=${encodeURIComponent(p1.nextCursor)}`);
+  const acc = [...p1.messages, ...p2.messages]; // newest-first [M1..M4]
+  const oldCursor = p2.nextCursor;              // boundary after M4
+  assert.equal(acc.length, 4);
+
+  // 2. New mail arrives (2 messages with the newest timestamps).
+  for (let i = 0; i < 2; i++) {
+    await alice.request({ type: "send", to: "human", subject: `new ${i}`, body: "fresh" });
+  }
+
+  // 3. Poll refresh: re-fetch page 1 → the 2 new messages are now the newest.
+  const fresh = await httpGet("/api/messages?limit=2");
+  const have = new Set(acc.map((m) => m.id));
+  const prepend = fresh.messages.filter((m) => !have.has(m.id));
+  assert.equal(prepend.length, 2, "page 1 now holds the 2 new messages");
+  const joined = [...prepend, ...acc]; // [new, new, M1..M4]
+
+  // 4. The OLD cursor still returns a strictly-older page with NO dupes.
+  const older = await httpGet(`/api/messages?limit=2&cursor=${encodeURIComponent(oldCursor)}`);
+  const seen = new Set(joined.map((m) => m.id));
+  for (const m of older.messages) {
+    assert.ok(!seen.has(m.id), `cursor page duplicates an already-loaded message (${m.id})`);
+  }
+
+  // 5. joined + cursor page reconstructs the full 8-message set (no gaps).
+  for (const m of older.messages) seen.add(m.id);
+  assert.equal(seen.size, 8, "6 original + 2 new = 8 contiguous messages, no gaps");
+
+  // 6. Contiguity: every cursor-page item is strictly older than the join tail.
+  const tail = joined[joined.length - 1];
+  for (const m of older.messages) {
+    assert.ok(m.timestamp < tail.timestamp || (m.timestamp === tail.timestamp && m.id < tail.id),
+      "cursor-page item is strictly older than the accumulated tail");
+  }
+});

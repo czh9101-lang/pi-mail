@@ -21,10 +21,12 @@ let boardUi = {
 let mailboxUi = {
   selectedKey: "",            // conversation key (agent id, or sorted "a|b" pair for inter-agent)
   showInterAgent: false,      // toggle: also list agent↔agent conversations
-  messages: [],               // current page of messages fetched from /api/messages
-  cursor: null,               // next-page cursor (for infinite scroll; wired in the follow-up subtask)
-  hasMore: false,             // whether more pages are available
-  loading: false,             // fetch in flight (guards against concurrent fetches)
+  messages: [],               // accumulated messages (newest-first); grown via infinite scroll
+  cursor: null,               // next-page cursor for loading older messages (null = no more)
+  hasMore: false,             // whether more pages are available (mirrors cursor != null)
+  loading: false,             // first-page / poll-refresh fetch in flight
+  loadingMore: false,         // infinite-scroll append fetch in flight
+  error: null,                // last fetch error message (for error state + retry)
 };
 // History tab message cache. Fetches from /api/messages?to=<agent> so the tab
 // no longer depends on the full log being shipped in /api/state.
@@ -129,17 +131,63 @@ async function fetchMessages(opts = {}) {
 }
 
 /** Fetch the first page of messages for the mailbox (newest-first, all mail).
- *  Resets the cache; load-more-on-scroll is wired in the follow-up subtask. */
+ *  On the initial load this seeds the cache; on a 3s poll refresh it only
+ *  PREPENDS newly-arrived messages (matched by id) so infinite-scroll
+ *  accumulation below is never clobbered. The next-page cursor is preserved
+ *  across refreshes — it is a stable (ts,id) boundary, so even after new mail
+ *  arrives it still points to the correct older page (no gaps, no dupes). */
 async function loadMailboxPage() {
-  if (mailboxUi.loading) return;
+  if (mailboxUi.loading || mailboxUi.loadingMore) return;
   mailboxUi.loading = true;
+  mailboxUi.error = null;
   try {
     const page = await fetchMessages({ limit: 50 });
-    mailboxUi.messages = page.messages || [];
+    const fresh = page.messages || [];
+    if (!mailboxUi.messages.length) {
+      // First load: seed the cache.
+      mailboxUi.messages = fresh;
+      mailboxUi.cursor = page.nextCursor || null;
+      mailboxUi.hasMore = !!page.hasMore;
+    } else {
+      // Poll refresh: prepend any genuinely-new messages (those whose id we
+      // don't already have). Page 1 is always the newest window, so any id in
+      // it that we lack is newer than our current head. Leave the cursor and
+      // accumulated older pages untouched.
+      const have = new Set(mailboxUi.messages.map((m) => m.id));
+      const prepend = fresh.filter((m) => !have.has(m.id));
+      if (prepend.length) mailboxUi.messages = [...prepend, ...mailboxUi.messages];
+      mailboxUi.hasMore = mailboxUi.cursor != null || !!page.hasMore;
+    }
+  } catch {
+    if (!mailboxUi.messages.length) mailboxUi.error = "Couldn't load messages.";
+    // else: leave the stale cache in place; the next poll will retry.
+  }
+  mailboxUi.loading = false;
+}
+
+/** Load the next page of older messages for infinite scroll (appends to the
+ *  accumulated list via the stored cursor). Guards against concurrent fetches
+ *  and a refresh in flight. Returns true if any new messages were added. */
+async function loadMoreMailbox() {
+  if (mailboxUi.loadingMore || mailboxUi.loading) return false;
+  if (!mailboxUi.cursor) return false; // no more to load
+  mailboxUi.loadingMore = true;
+  mailboxUi.error = null;
+  let added = false;
+  try {
+    const page = await fetchMessages({ limit: 50, cursor: mailboxUi.cursor });
+    const more = page.messages || [];
+    const have = new Set(mailboxUi.messages.map((m) => m.id));
+    for (const m of more) {
+      if (!have.has(m.id)) { mailboxUi.messages.push(m); added = true; }
+    }
     mailboxUi.cursor = page.nextCursor || null;
     mailboxUi.hasMore = !!page.hasMore;
-  } catch { /* leave stale cache */ }
-  mailboxUi.loading = false;
+  } catch {
+    mailboxUi.error = "Couldn't load more messages.";
+  }
+  mailboxUi.loadingMore = false;
+  return added;
 }
 
 /** Fetch the message history for the History tab (all mail delivered to an

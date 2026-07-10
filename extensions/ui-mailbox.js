@@ -26,7 +26,23 @@ function messageRow(m, opts = {}) {
   return card;
 }
 
+/** A small "try again" row shown inside the mailbox list when a page fetch
+ *  fails (first-load or load-more). Keeps the rest of the list usable. */
+function mailboxRetryRow(msg, onRetry) {
+  const row = el("div", "empty");
+  row.appendChild(document.createTextNode(msg + " "));
+  const btn = el("button", "btn secondary mini", "Try again");
+  btn.addEventListener("click", onRetry);
+  row.appendChild(btn);
+  return row;
+}
+
 function renderMailbox() {
+  // Preserve the conversation-list scroll position across the 3s poll
+  // re-render so infinite-scroll position isn't yanked back to the top when
+  // an unrelated slice of state (agent status, board, new mail) changes.
+  const prevList = main.querySelector(".mb-conv-list");
+  const prevTop = prevList ? prevList.scrollTop : 0;
   main.innerHTML = "";
   const grid = el("div", "mb-grid");
 
@@ -63,8 +79,9 @@ function renderMailbox() {
   };
 
   // Messages come from the paginated /api/messages endpoint (cached in
-  // mailboxUi.messages), not the full log in /api/state. Load-more-on-scroll
-  // is wired in the follow-up subtask; for now this renders the newest page.
+  // mailboxUi.messages), not the full log in /api/state. Older pages are
+  // appended on scroll (infinite scroll, task 276b3643); new mail is
+  // prepended on the 3s poll refresh.
   for (const m of mailboxUi.messages) {
     const hFrom = m.fromId === HUMAN_ID;
     const hTo = m.toId === HUMAN_ID;
@@ -82,7 +99,13 @@ function renderMailbox() {
   const convs = [...convMap.entries()].map(([key, c]) => ({ key, ...c })).sort((a, b) => b.sortTs - a.sortTs);
 
   if (!convs.length) {
-    convList.appendChild(el("div", "empty", mailboxUi.loading ? "Loading…" : (mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads.")));
+    if (mailboxUi.loading) {
+      convList.appendChild(el("div", "empty", "Loading…"));
+    } else if (mailboxUi.error) {
+      convList.appendChild(mailboxRetryRow(mailboxUi.error, () => { loadMailboxPage().then(render); }));
+    } else {
+      convList.appendChild(el("div", "empty", mailboxUi.showInterAgent ? "No messages." : "No conversations yet. Toggle inter-agent messages to see agent↔agent threads."));
+    }
   }
   for (const c of convs) {
     const last = c.msgs.slice().sort((a, b) => b.timestamp - a.timestamp)[0];
@@ -96,6 +119,29 @@ function renderMailbox() {
     row.addEventListener("click", () => { mailboxUi.selectedKey = c.key; syncHash(); renderMailbox(); });
     convList.appendChild(row);
   }
+
+  // Infinite-scroll footer + scroll wiring. When the list has conversations
+  // we show a trailing row for the load-more state (loading / end / error),
+  // and attach a scroll listener that fetches the next cursor page when the
+  // user nears the bottom. (task 276b3643)
+  if (convs.length) {
+    if (mailboxUi.loadingMore) {
+      convList.appendChild(el("div", "mb-more", "Loading more…"));
+    } else if (mailboxUi.error) {
+      convList.appendChild(mailboxRetryRow(mailboxUi.error, () => { loadMoreMailbox().then(render); }));
+    } else if (!mailboxUi.cursor) {
+      convList.appendChild(el("div", "mb-more", "No more messages"));
+    }
+  }
+  convList.addEventListener("scroll", () => {
+    if (mailboxUi.loadingMore || mailboxUi.loading || !mailboxUi.cursor) return;
+    if (convList.scrollTop + convList.clientHeight >= convList.scrollHeight - 240) {
+      const p = loadMoreMailbox();
+      render();        // show the "Loading more…" footer right away
+      p.then(render);  // then render the appended page when it lands
+    }
+  });
+
   left.appendChild(convList);
   grid.appendChild(left);
 
@@ -110,6 +156,7 @@ function renderMailbox() {
     right.appendChild(empty);
     grid.appendChild(right);
     main.appendChild(grid);
+    convList.scrollTop = prevTop;
     return;
   }
 
@@ -211,6 +258,7 @@ function renderMailbox() {
   right.appendChild(composeCard);
   grid.appendChild(right);
   main.appendChild(grid);
+  convList.scrollTop = prevTop;
 }
 
 /** Conversation key for a single message: the peer agent id for human↔agent

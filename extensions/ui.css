@@ -115,6 +115,7 @@
   .mb-thread-head h2 { margin: 0; }
   .mb-thread-count { color: var(--dim); font-size: 12px; }
   .mb-thread { max-height: 40vh; overflow-y: auto; }
+  .mb-more { padding: 10px 12px; color: var(--muted); font-size: 12px; text-align: center; }
   .mb-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; min-height: 300px; }
   @media (max-width: 900px) {
     .mb-grid { grid-template-columns: 1fr; }
