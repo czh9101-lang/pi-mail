@@ -8,13 +8,16 @@
  * compiled board-mcp.js are imported lazily so the daemon keeps working if the
  * MCP build or its npm deps are absent (graceful 503 on /mcp in that case).
  *
- * Stateless mode: a fresh McpServer + transport per request (the stateless
- * Streamable HTTP transport is single-use — see SDK docs). Method dispatch
- * (POST = JSON-RPC, GET = standalone SSE stream, DELETE = session close,
- * anything else = 405 with Allow: GET, POST, DELETE) is delegated to the SDK
- * transport, so the daemon does not gate on method itself. Board operations
- * run as the human agent, same as the web UI and the socket protocol's board_*
- * cases.
+ * Stateless mode: a fresh McpServer + transport per POST/DELETE (the stateless
+ * Streamable HTTP transport is single-use — see SDK docs). Method dispatch:
+ * POST = JSON-RPC and DELETE = session close go through the SDK transport;
+ * GET = standalone SSE stream is served directly by this module as a
+ * keep-alive (the SDK's stateless GET handler emits nothing and the board
+ * server pushes no notifications, so we emit SSE comment keep-alives
+ * ourselves to satisfy clients that wait for the first byte). Anything else
+ * falls through to the SDK's 405 with Allow: GET, POST, DELETE. Board
+ * operations run as the human agent, same as the web UI and the socket
+ * protocol's board_* cases.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +35,14 @@ import {
 import { syncBoard } from "./jira.mjs";
 
 const HUMAN_AGENT_ID = "00000000-0000-0000-0000-000000000000";
+
+/** Interval between SSE keep-alive comments on the GET /mcp stream. The MCP
+ *  Streamable HTTP spec explicitly permits SSE comment lines (": ...") as
+ *  keep-alives. The board server pushes no real notifications over the GET
+ *  stream (stateless, no subscriptions), so the stream is a keep-alive: we
+ *  emit one comment immediately on open (so clients waiting for the first
+ *  byte don't hit their connect timeout) and then every SSE_KEEPALIVE_MS. */
+const SSE_KEEPALIVE_MS = 15_000;
 
 const MCP_BUILD_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -140,11 +151,58 @@ function jsonRpcError(res, httpStatus, code, message) {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
+/** Serve the GET /mcp standalone SSE stream directly.
+ *
+ *  Why we don't delegate GET to the SDK transport: the SDK's stateless
+ *  `handleGetRequest` creates a ReadableStream whose `start()` only stores
+ *  the controller — it enqueues NOTHING. It only writes a priming event on
+ *  POST (and only when an eventStore is configured, which we don't). So a
+ *  stateless GET stream is silent until the server pushes a notification,
+ *  which the board server never does. A client that blocks waiting for the
+ *  first SSE byte (e.g. bundle-mcp, with a 30s connect timeout) therefore
+ *  hangs. Serving the keep-alive stream ourselves — an immediate comment +
+ *  periodic comments — is spec-compliant and fixes that. POST/DELETE (which
+ *  need JSON-RPC dispatch + session handling) still go through the SDK. */
+function handleGetSseStream(req, res) {
+  // The client MUST Accept text/event-stream (spec). Missing → 406, matching
+  // the SDK transport's own behaviour so the route stays spec-compliant.
+  const accept = req.headers.accept || "";
+  if (!accept.includes("text/event-stream")) {
+    jsonRpcError(res, 406, -32000, "Not Acceptable: Client must accept text/event-stream");
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  // Immediate keep-alive: gives waiting clients a first byte right away so
+  // their connect timeout never fires. Comment lines are ignored by SSE
+  // parsers and explicitly endorsed as keep-alives by the Streamable HTTP spec.
+  res.write(": keepalive\n\n");
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) { clearInterval(timer); return; }
+    res.write(": keepalive\n\n", () => {});
+  }, SSE_KEEPALIVE_MS);
+  const stop = () => clearInterval(timer);
+  req.on("close", stop);
+  res.on("close", stop);
+  res.on("error", stop);
+}
+
 /** Handle a /mcp request (any method — POST/GET/DELETE/…) using the in-process
- *  backend. Stateless: a fresh McpServer + transport per request. `parsedBody`
- *  is only meaningful for POST (pre-parsed by the caller to enforce the size
- *  guard); pass undefined for non-POST. */
+ *  backend. Stateless: a fresh McpServer + transport per POST/DELETE. GET is
+ *  served directly as a keep-alive SSE stream (see handleGetSseStream).
+ *  `parsedBody` is only meaningful for POST (pre-parsed by the caller to
+ *  enforce the size guard); pass undefined for non-POST. */
 export async function handleMcpRequest(req, res, parsedBody) {
+  // GET opens a standalone SSE keep-alive stream. Served directly (not via
+  // the SDK transport) because the SDK's stateless GET handler emits nothing
+  // and the board server pushes no notifications — see handleGetSseStream.
+  if (req.method === "GET") {
+    handleGetSseStream(req, res);
+    return;
+  }
   let deps;
   try {
     deps = await ensureMcp();

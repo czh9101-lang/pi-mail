@@ -184,6 +184,27 @@ test("GET /mcp with Accept: text/event-stream opens an SSE stream", async () => 
   await res.body?.cancel();
 });
 
+test("GET /mcp SSE stream emits an initial keep-alive byte (965da3ee)", async () => {
+  // The SDK's stateless GET handler enqueues nothing, so a client that waits
+  // for the first SSE byte (e.g. bundle-mcp, 30s connect timeout) hangs. The
+  // daemon now serves GET itself and emits an immediate `: keepalive` SSE
+  // comment so the first read resolves right away. Comment lines are ignored
+  // by SSE parsers and are spec-endorsed as keep-alives.
+  const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    headers: { Accept: "text/event-stream" },
+  });
+  assert.equal(res.status, 200);
+  const reader = res.body.getReader();
+  const first = await Promise.race([
+    reader.read(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("no initial byte within 3s")), 3000)),
+  ]);
+  assert.ok(first.value && first.value.length > 0, "stream sent an initial byte");
+  const text = new TextDecoder().decode(first.value);
+  assert.match(text, /^: keepalive/, `first chunk is a keep-alive comment: ${JSON.stringify(text)}`);
+  await reader.cancel();
+});
+
 // ── board tool calls (in-process backend → live board state) ───────────────
 
 test("board_list_tasks on an empty board", async () => {

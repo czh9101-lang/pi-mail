@@ -402,13 +402,17 @@ The daemon serves `/mcp` on its UI port (`PI_MAIL_UI_HOST`/
 fresh `McpServer` + transport per request, no session id — but handles the
 full Streamable HTTP method surface: `POST` carries JSON-RPC, `GET` opens a
 standalone SSE stream (`406` unless the client sends `Accept: text/event-stream`),
-and `DELETE`/other methods get a `405` with `Allow: GET, POST, DELETE`. Method
-dispatch is delegated to the SDK transport, so a client doing the GET/SSE
-handshake gets a `200 text/event-stream` (held open as a keep-alive; the board
-server pushes nothing over it) instead of a `405`. Stateful sessions and
-server-initiated push are not supported. The SDK + compiled
-`mcp/build/board-mcp.js` are imported lazily, so the daemon still runs if the
-MCP build or its npm deps are absent (`/mcp` answers `503` in that case).
+and `DELETE`/other methods get a `405` with `Allow: GET, POST, DELETE`. POST/
+DELETE dispatch is delegated to the SDK transport. The GET stream is served
+directly by the daemon as a keep-alive: it emits an SSE comment (`: keepalive`)
+immediately on open and then every 15s, because the SDK's stateless GET
+handler emits nothing and the board server pushes no notifications — without
+an initial byte, clients that wait for the first SSE event (e.g. `bundle-mcp`,
+with a 30s connect timeout) hang. SSE comment lines are explicitly endorsed as
+keep-alives by the Streamable HTTP spec. Stateful sessions and server-initiated
+push are not supported. The SDK + compiled `mcp/build/board-mcp.js` are imported
+lazily, so the daemon still runs if the MCP build or its npm deps are absent
+(`/mcp` answers `503` for POST/DELETE in that case; GET keep-alive still serves).
 
 The stdio bridge (`mcp/build/index.js --stdio`) talks to the daemon over its
 HTTP `/api/board*` endpoints; its daemon address is read from env, defaulting

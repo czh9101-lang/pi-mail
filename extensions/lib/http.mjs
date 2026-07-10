@@ -375,15 +375,16 @@ export function createHttpServer({ uiHtml, uiAssets }) {
     // ── MCP server (Streamable HTTP) — hosted in-process, no separate proc ─
     // The MCP Streamable HTTP transport is served at /mcp for the full method
     // surface: POST carries JSON-RPC requests, GET opens a standalone SSE
-    // stream (server→client notifications; 406 if the client doesn't Accept
-    // text/event-stream), DELETE ends a session. Method dispatch + header
-    // validation (incl. the 405 Allow: GET, POST, DELETE for unsupported
-    // methods) is delegated to the SDK transport — we only pre-parse the POST
-    // body (to enforce the size guard). Stateless: a fresh McpServer +
-    // transport per request, no session id (http-mcp.mjs). The GET stream is
-    // held open until the client disconnects; the board server pushes nothing
-    // over it (no subscriptions), so it is a spec-compliant keep-alive that
-    // satisfies clients requiring the GET handshake rather than a 405.
+    // keep-alive stream (406 if the client doesn't Accept text/event-stream),
+    // DELETE ends a session. POST/DELETE + header validation (incl. the 405
+    // Allow: GET, POST, DELETE for unsupported methods) is delegated to the SDK
+    // transport; GET is served directly by http-mcp.mjs as a keep-alive stream
+    // (immediate + periodic SSE comment keep-alives) because the SDK's
+    // stateless GET handler emits nothing and the board server pushes no
+    // notifications — without it, clients that wait for the first SSE byte
+    // (e.g. bundle-mcp) hang until their connect timeout. We only pre-parse
+    // the POST body (to enforce the size guard). Stateless: a fresh McpServer
+    // + transport per POST/DELETE, no session id (http-mcp.mjs).
     if (url.pathname === "/mcp") {
       const body = req.method === "POST" ? await readJsonBody(req) : undefined;
       await handleMcpRequest(req, res, body);
