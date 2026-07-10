@@ -59,11 +59,12 @@ test("mmKickoff still instructs mailing human + self-exit (no regression)", () =
   assert.match(MM_KICKOFF, /do NOT implement/i, "kickoff still frames the MM as a pure manager");
 });
 
-test("ceoKickoff also frames a FULL pass over every managed project (audit, 0c7e3fd0)", () => {
-  // The CEO has the same framing gap: it could stop after the first managed
-  // project. The CEO kickoff must instruct considering every managed project.
+test("ceoKickoff also frames a FULL pass over every board group (audit, 0c7e3fd0)", () => {
+  // The CEO has the same framing gap: it could stop after the first group.
+  // The CEO kickoff must instruct considering every board group (the CEO
+  // oversees ALL board groups, not only the favorited baseline).
   const CEO = ceoKickoff(["/tmp/managed-proj"]);
   assert.match(CEO, /FULL pass/i, "CEO kickoff explicitly calls out a FULL pass");
-  assert.match(CEO, /every managed/i, "CEO kickoff references every managed project");
+  assert.match(CEO, /every board group/i, "CEO kickoff references every board group");
   assert.match(CEO, /not one action/i, "CEO kickoff states a pass is NOT one action");
 });

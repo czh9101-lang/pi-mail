@@ -44,3 +44,27 @@ test("ceoKickoff still instructs mailing human + self-exit (no regression)", () 
   assert.ok(KICKOFF.includes("mail_stop_self"), "kickoff instructs calling mail_stop_self");
   assert.match(KICKOFF, /no.*task administration|do not.*move|do not.*archive/i, "kickoff still forbids task administration");
 });
+
+test("ceoKickoff instructs overseeing ALL board groups, not only favorites", () => {
+  // The CEO must review every board group, not just the favorited set.
+  assert.match(KICKOFF, /ALL board groups|every board group|every other group/i, "kickoff states all-groups oversight");
+  assert.match(KICKOFF, /not only favorites|not just the favorited|not.*favorites list/i, "kickoff says oversight is not limited to favorites");
+  // Favorites are framed as the additive always-managed baseline.
+  assert.match(KICKOFF, /always-managed baseline/i, "kickoff frames favorites as the always-managed baseline");
+  // A non-favorited group with active tasks must still get an MM.
+  assert.match(KICKOFF, /non-favorited group with active tasks|unfavorited group with on-board tasks/i, "kickoff covers non-favorited groups with tasks");
+  // board_list_tasks must be used with all-groups visibility to enumerate groups.
+  assert.match(KICKOFF, /all-groups visibility/i, "kickoff tells the CEO to use board_list_tasks all-groups visibility");
+  assert.match(KICKOFF, /group.*field|distinct group/i, "kickoff tells the CEO to group tasks by their group field");
+});
+
+test("ceoKickoff with empty favorites still instructs all-groups oversight", () => {
+  const k = ceoKickoff([]);
+  // No favorited project is listed, but all-groups oversight still applies.
+  assert.match(k, /No favorited projects this cycle/i, "kickoff notes the empty favorites baseline");
+  assert.match(k, /still review every other group|You still review/i, "kickoff still requires reviewing non-favorited groups");
+  assert.match(k, /ALL board groups|every board group/i, "kickoff keeps all-groups scope with empty favorites");
+  // The CEO must still be told how to discover a non-favorited project's cwd.
+  assert.match(k, /mail_list_agents.*cwd|connected agent.*cwd/i, "kickoff tells the CEO to find cwds via mail_list_agents");
+  assert.match(k, /mail_list_projects/i, "kickoff tells the CEO to find cwds via mail_list_projects");
+});

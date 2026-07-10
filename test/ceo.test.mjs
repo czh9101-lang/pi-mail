@@ -380,3 +380,71 @@ test("mail_stop_self tears down a daemon-spawned agent's session", async () => {
   assert.equal(after, undefined, "registry entry removed immediately on stop_self");
   workerClient.close();
 });
+
+// ── all-groups oversight (CEO covers EVERY board group, not only favorites) ───
+
+// These run last and archive their task in cleanup so the shared board stays
+// clean for the suite (the spawn-gate now also fires on on-board tasks, so a
+// leftover task would flip "no spawn when favorites empty" for a later run).
+
+test("ceoState reports all-groups scope + on-board-task signal", async () => {
+  await postCfg({ config: { ceoEnabled: true, ceoIntervalMin: 1 } });
+  const dir = mkDir("proj-ceo-state");
+  await favorite(dir, true);
+  const st = await ceoState();
+  assert.equal(st.allGroups, true, "ceoState reports the all-groups scope");
+  assert.equal(st.onBoardTasks, false, "no on-board tasks yet → signal false");
+  await favorite(dir, false);
+  await postCfg({ config: { ceoEnabled: false } });
+});
+
+test("CEO spawns when favorites empty but on-board tasks exist (all-groups)", async () => {
+  // A non-favorited group with an on-board task must still trigger a CEO
+  // cycle — the CEO oversees ALL board groups, not only the favorited baseline.
+  const dir = mkDir("proj-ceo-allgroups");
+  // Register an agent in that project so created tasks stamp its group.
+  const worker = await mkClient();
+  const agentId = crypto.randomUUID();
+  await worker.request({ type: "register", agentId, agentName: "allgroups-worker", cwd: dir });
+  // Ensure NO favorites — the only thing to manage is this non-favorited task.
+  for (const cwd of (await ceoState()).managedProjects) await favorite(cwd, false);
+  assert.equal((await ceoState()).managedProjects.length, 0, "favorites is empty");
+  // Create an on-board task in the non-favorited group.
+  const cr = await worker.request({ type: "board_create", summary: "allgroups probe", description: "non-favorited group task" });
+  assert.notEqual(cr.type, "error", `board_create succeeded: ${JSON.stringify(cr)}`);
+  const taskId = cr.task.id;
+  assert.equal((await ceoState()).onBoardTasks, true, "on-board task detected");
+  await postCfg({ config: { ceoEnabled: true, ceoIntervalMin: 1 } });
+  // Favorites empty + on-board task present → a CEO spawns anyway.
+  assert.equal((await ceoTick(undefined, true)).spawned, true, "CEO spawned despite empty favorites (on-board task exists)");
+  await settle();
+  const ceo = (await ceoSessions())[0];
+  assert.ok(ceo, "a CEO session was spawned for the non-favorited group");
+  // The kickoff must NOT list the project as a favorited baseline (it isn't),
+  // but MUST instruct all-groups oversight so the CEO reviews it anyway.
+  assert.ok(!ceo.kickoff.includes(dir), "kickoff does not list the non-favorited project as a favorite");
+  assert.match(ceo.kickoff, /No favorited projects this cycle/i, "kickoff notes the empty favorites baseline");
+  assert.match(ceo.kickoff, /ALL board groups|every board group/i, "kickoff instructs all-groups oversight");
+  assert.match(ceo.kickoff, /non-favorited group with active tasks|unfavorited group with on-board tasks/i, "kickoff covers non-favorited groups with tasks");
+  await spawnStop(ceo.name);
+  // Cleanup: archive the task so it doesn't keep triggering cycles / pollute
+  // the shared board for the rest of the suite.
+  await worker.request({ type: "board_move", taskId, column: "archive" });
+  worker.close();
+  await postCfg({ config: { ceoEnabled: false } });
+});
+
+test("no spawn when favorites empty AND no on-board tasks (all-groups gate)", async () => {
+  // Complement of the above: with nothing to manage at all, the CEO must not
+  // spawn. (Same condition the legacy "no spawn when favorites empty" test
+  // relied on — now made explicit for the all-groups gate.)
+  await postCfg({ config: { ceoEnabled: true, ceoIntervalMin: 1 } });
+  for (const cwd of (await ceoState()).managedProjects) await favorite(cwd, false);
+  assert.equal((await ceoState()).managedProjects.length, 0, "favorites is empty");
+  assert.equal((await ceoState()).onBoardTasks, false, "no on-board tasks");
+  const before = (await spawnState()).sessions.length;
+  await ceoTick(undefined, true);
+  await settle();
+  assert.equal((await spawnState()).sessions.length, before, "no CEO spawned with nothing to manage");
+  await postCfg({ config: { ceoEnabled: false } });
+});
