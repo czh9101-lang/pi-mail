@@ -56,6 +56,24 @@ function renderBoard() {
     renderBoard();
   });
   bar.appendChild(settingsBtn);
+  // Run a CEO cycle now (manual trigger). Spawns a top-tier manager pass on
+  // demand via a forced ceoTick — reuses the scheduler's own spawnCeo (first
+  // favorite cwd, ceoModel, no-overlap guard, canonical ceoKickoff), so no
+  // cwd picker is needed. Disabled while a CEO session is already live; if
+  // the CEO feature is off, the daemon returns a skipped reason we toast.
+  const ceoLive = (state.spawn?.sessions || []).some((s) => s.ceo && s.alive);
+  const ceoBtn = el("button", "btn secondary mini", ceoLive ? "👔 CEO running…" : "👔 Run CEO");
+  ceoBtn.disabled = ceoLive;
+  ceoBtn.title = "Spawn a CEO management pass now (reviews the federation, spawns middle managers)";
+  ceoBtn.addEventListener("click", async () => {
+    ceoBtn.disabled = true; ceoBtn.textContent = "Spawning…";
+    const r = await post("/api/ceo/tick", { force: true });
+    ceoBtn.disabled = false; ceoBtn.textContent = "👔 Run CEO";
+    if (r.ok) { toast("✅ CEO spawned: " + (r.name || "agent")); refresh(); }
+    else if (r.skipped) toast("ℹ️ CEO not spawned: " + r.skipped + (r.skipped === "live CEO running" ? "" : " (check Settings)"), true);
+    else toast("❌ " + (r.error || "failed"), true);
+  });
+  bar.appendChild(ceoBtn);
   const spawnBtn = el("button", "btn spawn-btn", "➕ Spawn agent");
   spawnBtn.addEventListener("click", openSpawnModal);
   bar.appendChild(spawnBtn);

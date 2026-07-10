@@ -117,6 +117,8 @@ import {
 } from "./lib/board-ops.mjs";
 import { handleMessage } from "./lib/protocol.mjs";
 import { createHttpServer } from "./lib/http.mjs";
+import { startMiddleManagerLoop } from "./lib/middle-manager.mjs";
+import { startCeoLoop } from "./lib/ceo.mjs";
 
 // ── Config (server/UI-only) ────────────────────────────────────────────────
 
@@ -322,6 +324,21 @@ setInterval(() => syncBoard("interval"), JIRA_SYNC_INTERVAL_MS);
 // interval.
 setInterval(nudgeIdleTasks, 60_000);
 
+// Middle-manager loop — spawns an ephemeral management agent on a schedule
+// (default every 30 min, when enabled + favorites non-empty) that reviews the
+// board, unblocks workers, and shepherds tasks to Done/Archive. Also reaps
+// dead/over-lifetime MM sessions. Disabled by default. See
+// lib/middle-manager.mjs.
+startMiddleManagerLoop();
+
+// CEO loop — spawns an ephemeral top-tier manager on a schedule (default every
+// 120 min, when enabled + favorites non-empty) that reviews the federation and
+// spawns middle managers on demand. When `ceoEnabled` is true, the CEO is the
+// sole MM spawner (the MM loop above skips its own spawn); the MM reaper still
+// runs. Also reaps dead/over-lifetime CEO sessions. Disabled by default. See
+// lib/ceo.mjs.
+startCeoLoop();
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 function cleanup() {
@@ -335,10 +352,11 @@ function cleanup() {
   try {
     if (lockFd != null) { fs.closeSync(lockFd); fs.unlinkSync(LOCK_FILE); }
   } catch {}
-  // Flush any pending board write before exiting.
+  // Flush any pending board write before exiting. (Don't reassign the
+  // imported `boardPersistTimer` binding — ESM named imports are read-only
+  // in this module; clearTimeout is enough since we exit immediately after.)
   if (boardPersistTimer) {
     clearTimeout(boardPersistTimer);
-    boardPersistTimer = null;
     flushBoard();
   }
   // Flush any pending spawn registry write before exiting.

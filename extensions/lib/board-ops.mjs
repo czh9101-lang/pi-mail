@@ -6,9 +6,11 @@
 
 import {
   HUMAN_AGENT_ID,
+  HUMAN_AGENT_NAME,
   agentDisplayName,
   log,
   sendMail,
+  resolveTarget,
 } from "./core.mjs";
 import {
   board,
@@ -437,6 +439,35 @@ export function boardSetConfig({ config, columns } = {}) {
     if (typeof config.nudgeIntervalMin === "number" && Number.isFinite(config.nudgeIntervalMin)) {
       board.config.nudgeIntervalMin = Math.max(1, Math.floor(config.nudgeIntervalMin));
     }
+    // Middle-manager config (per-board). mmEnabled defaults false; the daemon
+    // scheduler skips spawning when disabled or when the favorites list is
+    // empty. See lib/middle-manager.mjs.
+    if (typeof config.mmEnabled === "boolean") board.config.mmEnabled = config.mmEnabled;
+    if (typeof config.mmIntervalMin === "number" && Number.isFinite(config.mmIntervalMin)) {
+      board.config.mmIntervalMin = Math.max(1, Math.floor(config.mmIntervalMin));
+    }
+    if (typeof config.mmMaxLifetimeMin === "number" && Number.isFinite(config.mmMaxLifetimeMin)) {
+      board.config.mmMaxLifetimeMin = Math.max(1, Math.floor(config.mmMaxLifetimeMin));
+    }
+    // Worker reaper safety bound (per-board). A daemon-spawned worker that
+    // does not self-exit within this many minutes is force-killed so
+    // hung/forgotten workers never leak. Default 30. See lib/middle-manager.mjs
+    // (reapWorkers) + the README ephemerality invariant.
+    if (typeof config.workerMaxLifetimeMin === "number" && Number.isFinite(config.workerMaxLifetimeMin)) {
+      board.config.workerMaxLifetimeMin = Math.max(1, Math.floor(config.workerMaxLifetimeMin));
+    }
+    if (typeof config.mmModel === "string") board.config.mmModel = config.mmModel.trim();
+    // CEO config (per-board). ceoEnabled defaults false. When enabled the CEO
+    // replaces the daemon's fixed-interval MM timer (CEO becomes the sole MM
+    // spawner); the MM reaper still runs. See lib/ceo.mjs.
+    if (typeof config.ceoEnabled === "boolean") board.config.ceoEnabled = config.ceoEnabled;
+    if (typeof config.ceoIntervalMin === "number" && Number.isFinite(config.ceoIntervalMin)) {
+      board.config.ceoIntervalMin = Math.max(1, Math.floor(config.ceoIntervalMin));
+    }
+    if (typeof config.ceoMaxLifetimeMin === "number" && Number.isFinite(config.ceoMaxLifetimeMin)) {
+      board.config.ceoMaxLifetimeMin = Math.max(1, Math.floor(config.ceoMaxLifetimeMin));
+    }
+    if (typeof config.ceoModel === "string") board.config.ceoModel = config.ceoModel.trim();
     // Empty token means "keep the existing one" so the UI never has to echo it.
     if (typeof config.apiToken === "string" && config.apiToken.trim()) {
       board.config.apiToken = config.apiToken.trim();

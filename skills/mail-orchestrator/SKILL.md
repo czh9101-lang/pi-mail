@@ -279,6 +279,48 @@ Rules:
 - The human can also spawn/stop from the board UI (➕ Spawn agent, with a
   directory picker) and open a live terminal (xterm.js) into the tmux session.
 
+### Worker self-exit (`mail_stop_self`)
+
+Daemon-spawned workers (and middle managers / CEOs) can tear down **their own**
+session with `mail_stop_self` when their work is fully done and no further work
+is expected. The `task-board` skill instructs a board-dispatched worker to call
+it after it finishes its assigned task and reports completion. You generally do
+**not** need to `mail_stop_agent` a worker that self-exits — but if a worker
+goes silent without self-exiting, `mail_stop_agent` is your fallback to reap it.
+
+Rules:
+- `mail_stop_self` is refused for operator-launched interactive agents (they
+  stay alive unless explicitly stopped).
+- A persistent worker pool you intend to reuse should NOT be told to self-exit;
+  reserve self-exit for one-shot task workers.
+
+### Ephemerality — every spawned agent is killed after its pass
+
+The hierarchy is **CEO (scheduled) → middle managers (spawned by CEO) → workers**.
+Every daemon-spawned session in it is **ephemeral**: each is killed after its
+pass. Self-exit (`mail_stop_self`) is the primary, clean path — the reaper is
+the **enforced backstop**, not the primary path: if an agent doesn't self-exit
+(hangs, crashes, stuck in a long turn, forgets), the daemon force-kills its
+session at its tier's `*MaxLifetimeMin` boundary (`ceoMaxLifetimeMin`,
+`mmMaxLifetimeMin`, `workerMaxLifetimeMin`) and removes the registry entry.
+Cascade cleanup is independent per tier — reaping a CEO mid-pass can't orphan
+its MM/worker, because each is reaped on its own lifetime. So: tell workers to
+self-exit when done; don't babysit the reaper. If a worker goes silent without
+self-exiting, `mail_stop_agent` is your immediate lever (the reaper will catch
+it eventually, but you'll see it first). (See the README "Ephemerality" section.)
+
+### Reporting pi-mail bugs / improvements
+
+If you (or a worker you're coordinating) notice a genuine pi-mail bug or a
+concrete, well-scoped improvement that can't be fixed inline and genuinely
+needs the MM/CEO/operator to act on it, create a board task for it
+(`board_create_task` into **Backlog** or **To Do**). The normal MM/CEO
+board-review pass picks it up automatically — no special plumbing. Keep it
+**surgical and substantive**: a real, actionable bug or a concrete improvement,
+not a vague "would be nice". Only raise one when no other option exists, and one
+task per distinct issue (fold related points together). Do **not** flood the
+board with feature requests.
+
 ---
 
 ## 7. Worker Babysitting — The Core of This Skill

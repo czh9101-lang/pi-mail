@@ -113,6 +113,37 @@ with `board_update_task` (this pushes to Jira) and clear the flag with
    not a report.
 7. If blocked: comment the blocker on the task AND mail the assigner. Never
    guess.
+8. **Self-exit when finished.** If you are a daemon-spawned worker (you were
+   spawned by `mail_spawn_agent` / the board UI, not launched interactively by
+   an operator at a terminal) and your assigned task is fully done with no
+   further work expected, call `mail_stop_self` to tear down your own session
+   after reporting completion. Do not call it if you're a persistent worker
+   expecting more tasks, or an operator-launched interactive agent (it will be
+   refused).
+
+### Ephemerality — you are killed after your pass, no matter what
+
+Every spawned agent in the hierarchy (CEO → middle managers → workers) is
+**ephemeral**: each is killed after its pass. Calling `mail_stop_self` when your
+task is done is the primary, clean path. But the reaper is the **enforced
+backstop**: if you don't self-exit (you hang, crash, get stuck in a long turn,
+or simply forget), the daemon force-kills your session at its `*MaxLifetimeMin`
+boundary (`workerMaxLifetimeMin` for plain workers, default 30) and removes the
+registry entry. So finish cleanly and call `mail_stop_self` — don't rely on the
+reaper to notice you. The reaper is the backstop, not the primary path. (See
+the README "Ephemerality" section.)
+
+### Reporting pi-mail bugs / improvements
+
+If, while working, you notice a genuine pi-mail bug or a concrete, well-scoped
+improvement that you can't fix inline and that genuinely needs the MM/CEO/
+operator to act on it, create a board task for it (`board_create_task` into
+**Backlog** or **To Do**). The normal MM/CEO board-review pass picks it up
+automatically — no special plumbing. Keep it **surgical and substantive**: a
+real, actionable bug or a concrete improvement, not a vague "would be nice".
+Only raise one when no other option exists, and one task per distinct issue
+(fold related points together). Do **not** flood the board with feature
+requests.
 
 ## Subtasks
 

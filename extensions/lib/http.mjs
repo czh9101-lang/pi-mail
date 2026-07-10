@@ -13,7 +13,6 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  agents,
   messageLog,
   HUMAN_AGENT_ID,
   HUMAN_AGENT_NAME,
@@ -22,6 +21,7 @@ import {
   sendMail,
   broadcastMail,
   shellQuote,
+  federationAgents,
 } from "./core.mjs";
 import { boardState, board, jiraCfg } from "./board.mjs";
 import {
@@ -35,6 +35,8 @@ import {
   boardSetConfig,
 } from "./board-ops.mjs";
 import { syncBoard } from "./jira.mjs";
+import { mmState } from "./middle-manager.mjs";
+import { ceoState, ceoTick } from "./ceo.mjs";
 import {
   spawnState,
   listSpawnDir,
@@ -58,21 +60,9 @@ const UI_ASSET_TYPES = {
 // ── Federation snapshot (for the UI) ──────────────────────────────────────────
 
 function federationState() {
-  const list = Array.from(agents.values()).map((a) => a.info);
-  // Always expose the human as a virtual, discoverable agent.
-  list.push({
-    agentId: HUMAN_AGENT_ID,
-    agentName: HUMAN_AGENT_NAME,
-    registeredAt: 0,
-    status: "human operator",
-    contextPct: null,
-    cwd: "",
-    model: "",
-    isHuman: true,
-  });
   return {
     human: { agentId: HUMAN_AGENT_ID, agentName: HUMAN_AGENT_NAME },
-    agents: list,
+    agents: federationAgents(),
     messages: messageLog,
     board: boardState(),
     spawn: spawnState(),
@@ -159,6 +149,15 @@ const inProcessBoardBackend = {
         apiTokenSet: !!board.config.apiToken,
         nudgeEnabled: board.config.nudgeEnabled !== false,
         nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
+        mmEnabled: board.config.mmEnabled === true,
+        mmIntervalMin: board.config.mmIntervalMin ?? 30,
+        mmModel: board.config.mmModel ?? "",
+        mmMaxLifetimeMin: board.config.mmMaxLifetimeMin ?? 15,
+        workerMaxLifetimeMin: board.config.workerMaxLifetimeMin ?? 30,
+        ceoEnabled: board.config.ceoEnabled === true,
+        ceoIntervalMin: board.config.ceoIntervalMin ?? 120,
+        ceoModel: board.config.ceoModel ?? "",
+        ceoMaxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
       },
       columns: board.columns,
     };
@@ -387,6 +386,15 @@ export function createHttpServer({ uiHtml, uiAssets }) {
           apiTokenSet: !!board.config.apiToken,
           nudgeEnabled: board.config.nudgeEnabled !== false,
           nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
+          mmEnabled: board.config.mmEnabled === true,
+          mmIntervalMin: board.config.mmIntervalMin ?? 30,
+          mmModel: board.config.mmModel ?? "",
+          mmMaxLifetimeMin: board.config.mmMaxLifetimeMin ?? 15,
+          workerMaxLifetimeMin: board.config.workerMaxLifetimeMin ?? 30,
+          ceoEnabled: board.config.ceoEnabled === true,
+          ceoIntervalMin: board.config.ceoIntervalMin ?? 120,
+          ceoModel: board.config.ceoModel ?? "",
+          ceoMaxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
         },
         columns: board.columns,
       });
@@ -407,6 +415,33 @@ export function createHttpServer({ uiHtml, uiAssets }) {
       }
       await syncBoard("manual");
       json(res, 200, { ok: !board.syncError, error: board.syncError ?? undefined });
+      return;
+    }
+
+    // Middle-manager status (config snapshot + live MM sessions). Read-only.
+    if (req.method === "GET" && url.pathname === "/api/mm") {
+      json(res, 200, mmState());
+      return;
+    }
+
+    // CEO status (config snapshot + live CEO sessions). Read-only.
+    if (req.method === "GET" && url.pathname === "/api/ceo") {
+      json(res, 200, ceoState());
+      return;
+    }
+
+    // Run a CEO cycle now (manual trigger from the Board UI). Forces a tick
+    // — bypasses the interval gate — so the operator can spawn a CEO on
+    // demand instead of waiting for the scheduler. Reuses the scheduler's
+    // own spawnCeo (picks the first favorite cwd, uses ceoModel, respects
+    // the no-overlap guard, injects the canonical ceoKickoff). Still
+    // requires ceoEnabled === true (a forced tick on a disabled CEO is a
+    // no-op); the UI toasts that hint. Returns the ceoTick result.
+    if (req.method === "POST" && url.pathname === "/api/ceo/tick") {
+      const r = ceoTick(Date.now(), true);
+      json(res, 200, r.error ? { ok: false, error: r.error }
+        : r.spawned ? { ok: true, name: r.name }
+        : { ok: false, skipped: r.reason || r.skipped || "not spawned" });
       return;
     }
 
@@ -472,7 +507,7 @@ export function createHttpServer({ uiHtml, uiAssets }) {
 
 httpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    log(`Mail UI: port ${UI_PORT} in use — UI disabled (set PI_MAIL_UI_PORT to change)`);
+    log(`Mail UI: port ${process.env.PI_MAIL_UI_PORT || "1994"} in use — UI disabled (set PI_MAIL_UI_PORT to change)`);
   } else {
     log(`Mail UI error: ${err.message}`);
   }

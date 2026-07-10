@@ -21,6 +21,9 @@ const REPO = path.resolve(import.meta.dirname, "..");
 const DAEMON = path.join(REPO, "extensions", "daemon.mjs");
 
 let tmpHome, tmpState, fakeTmux, proc, sockPath, client;
+// Kill any spawned daemon when the test runner exits (incl. Ctrl-C / timeout)
+// so interrupted runs don't leave orphan daemon processes behind.
+process.on("exit", () => { try { if (proc) proc.kill("SIGKILL"); } catch {} });
 
 function mkFakeTmux() {
   const script = `#!/bin/sh

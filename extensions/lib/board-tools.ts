@@ -436,12 +436,14 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
       model: Type.Optional(Type.String({ description: "Optional model, e.g. 'anthropic/claude-sonnet-4' (defaults to pi's default)" })),
       kickoff: Type.Optional(Type.String({ description: "Optional kickoff prompt; delivered to the new agent as a new-session task once it registers" })),
       favorite: Type.Optional(Type.Boolean({ description: "If true, mark this project dir as a favorite (shown at the top of mail_list_projects and the UI picker). Use for projects you spawn into often." })),
+      mm: Type.Optional(Type.Boolean({ description: "If true, spawn a middle-manager session (ephemeral, runs the MM pass + self-deletes). Used by the CEO to spawn MMs; rarely needed by other agents." })),
+      ceo: Type.Optional(Type.Boolean({ description: "If true, spawn a CEO session (top-tier manager; ephemeral). Reserved for the daemon scheduler / operator; rarely used directly." })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
       try {
         const resp = await ctx.client.request<{ type: string; name?: string; message?: string }>(
-          { type: "spawn", cwd: params.cwd, name: params.name, model: params.model, kickoff: params.kickoff, favorite: params.favorite },
+          { type: "spawn", cwd: params.cwd, name: params.name, model: params.model, kickoff: params.kickoff, favorite: params.favorite, mm: params.mm, ceo: params.ceo },
           45_000
         );
         if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
@@ -479,6 +481,40 @@ export function registerBoardAndSpawnTools(pi: ExtensionAPI, ctx: BoardToolCtx):
         );
         if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
         return { content: [{ type: "text" as const, text: `✅ Stopped agent '${params.name}'` }] };
+      } catch (err: unknown) {
+        return errText(err);
+      }
+    },
+  });
+
+  // A daemon-spawned agent tears down its OWN session + registry entry when its
+  // work is done (instead of waiting for the reaper / operator). Workers,
+  // middle-managers, CEOs, and any other daemon-spawned agent may call this.
+  // Refuses operator-launched interactive agents (they stay alive unless
+  // explicitly stopped via the UI). The daemon removes the registry entry
+  // immediately and kills the tmux session after a short grace so the tool
+  // response + any final mail flush before the process dies.
+  pi.registerTool({
+    name: "mail_stop_self",
+    label: "Mail: Stop Self",
+    description:
+      "Tear down your own daemon-spawned agent session (kills your tmux session + removes the spawn-registry entry). Call this when your work is fully done and no further work is assigned/expected — e.g. a board-dispatched worker after it finishes its task and reports completion, or a middle-manager/CEO after its pass + completion summary. Only daemon-spawned agents may call this (operator-launched interactive agents are refused and stay alive). The daemon kills the session after a short grace so your final mail/tool response flushes first.",
+    promptSnippet: "Stop your own spawned session when done",
+    promptGuidelines: [
+      "Call mail_stop_self when your assigned work is fully done and you have no further work expected — after reporting completion / mailing the summary.",
+      "Do NOT call it if you are a persistent orchestrator-managed worker expecting more tasks, or an operator-launched interactive agent (it will be refused).",
+    ],
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _onUpdate, _ctx) {
+      if (!ctx.connected || !ctx.client) return ctx.notConnected;
+      try {
+        const resp = await ctx.client.request<{ type: string; message?: string; name?: string; graceMs?: number }>(
+          { type: "stop_self" },
+          8_000
+        );
+        if (resp.type === "error") return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] };
+        const grace = resp.graceMs ?? 3000;
+        return { content: [{ type: "text" as const, text: `✅ Self-exit scheduled: your session '${resp.name ?? ""}' will be torn down in ${Math.round(grace / 1000)}s (final mail flushes first).` }] };
       } catch (err: unknown) {
         return errText(err);
       }

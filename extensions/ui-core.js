@@ -200,7 +200,11 @@ function renderAgents() {
       // Spawned agents get a Terminal + Stop button. state.spawn.sessions is
       // the daemon's tracked set (only those it spawned), so the buttons
       // only appear for spawn-managed agents — never for operator-launched ones.
-      const spawned = (state.spawn?.sessions || []).find(s => s.name === a.agentName || s.agentName === a.agentName);
+      // Link by agentId when the daemon has resolved it (robust); fall back to
+      // name matching for sessions still waiting for the agent to register.
+      const spawned = (state.spawn?.sessions || []).find(s =>
+        (s.agentId && a.agentId && s.agentId === a.agentId) ||
+        s.name === a.agentName || s.agentName === a.agentName);
       if (spawned) {
         const termBtn = el("button", "btn secondary mini", "Terminal");
         termBtn.addEventListener("click", () => openTerminal(spawned.name));

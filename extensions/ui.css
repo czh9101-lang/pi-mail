@@ -122,6 +122,8 @@
   .bcol .bhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
   .bcol .bhead .bname { font-weight: 600; font-size: 13px; }
   .bcol .bhead .bcount { color: var(--muted); font-size: 12px; }
+  .bcol.drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; background: var(--panel2); }
+  .tcard.dragging { opacity: 0.4; }
   .badge.jira { color: var(--accent2); border-color: var(--accent); }
   .badge.custom { color: var(--warning); border-color: var(--warning); }
   .badge.flag { color: var(--error); border-color: var(--error); }

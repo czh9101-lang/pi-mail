@@ -42,6 +42,7 @@ http://localhost:1994
 |---------|---------|-------------|
 | `PI_MAIL_UI_PORT` | `1994` | TCP port for the web UI |
 | `PI_MAIL_UI_HOST` | `0.0.0.0` | Bind address (use `127.0.0.1` to restrict to localhost) |
+| `PI_MAIL_MM_TICK_MS` | `60000` | How often the middle-manager scheduler + reaper wake up to check |
 
 The UI starts with the daemon and is non-fatal if the port is taken — the mail
 federation keeps working regardless. Restart the daemon to apply changes:
@@ -121,7 +122,9 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
 | `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout |
 | `POST /api/board/sync` | — | Force a Jira sync now |
-| `GET /api/spawn` | — | Spawned sessions: name, cwd, model, alive |
+| `GET /api/mm` | — | Middle-manager state: config + active MM sessions |
+| `GET /api/ceo` | — | CEO state: config + active CEO sessions |
+| `GET /api/spawn` | — | Spawned sessions: name, cwd, model, alive, agentId |
 | `POST /api/spawn` | `{ cwd, name?, model?, kickoff? }` | Spawn a fresh agent (tmux); returns `{ name }` |
 | `POST /api/spawn/stop` | `{ name }` | Stop a daemon-spawned agent |
 | `GET /api/spawn/ls?path=` | — | List subdirectories of any directory |
@@ -232,6 +235,119 @@ assign, flag/clear, +subtask). It re-renders every 3 s poll, so it stays live.
 A **daemon nudge** mails in-progress assignees who haven't posted progress in
 a while (default 30 min; one reminder per gap). The operator can tune or
 disable it in Board → Settings (`nudgeEnabled`, `nudgeIntervalMin`).
+
+## Middle manager
+
+The **middle manager** (MM) is an ephemeral agent the daemon spawns on a
+schedule (default every 30 min, when enabled) to keep the board moving
+without an operator babysitting it. On each cycle one MM reviews the board
+for the **favorited** (managed) projects, unblocks stuck workers, shepherds
+finished tasks into Done/Archive, and curates the favorites list — then mails
+`human` a completion summary and exits. Its tmux session is reaped
+automatically.
+
+- **Managed projects = favorites.** Star a project dir
+  (`mail_set_project_favorite`, the board UI spawn picker, or `favorite:true`
+  on `mail_spawn_agent`) to add it to the MM's roster. The MM may add/remove
+  favorites itself to curate its roster over time.
+- **All-groups visibility.** The MM sees every project group's tasks (like the
+  human), then focuses on its managed projects' tasks.
+- **Escalation = the board.** Workers surface blockers by updating the board
+  (a comment, a progress post, or flagging the task unclear) — they don't need
+  to mail the human or the MM directly. The MM re-reads each task's activity on
+  every cycle, so that's how blockers reach it. It resolves what it can and
+  only mails the human for blockers it can't resolve.
+- **Lifecycle.** Spawned fresh each cycle, then self-deletes on completion
+  (calls `mail_stop_self`). A reaper stops any MM session whose tmux session
+  has already ended, and forcibly stops any exceeding `mmMaxLifetimeMin`
+  (default 15) so dead/stuck MM sessions never accumulate. No overlap: a new
+  cycle is skipped while an MM is still alive. The MM tick also runs the
+  **worker reaper** (see Ephemerality) so hung workers are reaped on every
+  cycle.
+- **Config** (Board → Settings, or `set_board_config`): `mmEnabled` (default
+  `false`), `mmIntervalMin` (default `30`), `mmModel` (optional),
+  `mmMaxLifetimeMin` (default `15`), `workerMaxLifetimeMin` (default `30`, the
+  worker reaper safety bound — see Ephemerality). Disabled by default; no spawn
+  when the favorites list is empty. A `GET /api/mm` endpoint exposes the live
+  state (config + active sessions).
+- **Force a cycle now.** A diagnostic `mm_tick` socket RPC (with `force: true`)
+  runs a cycle immediately, bypassing the interval gate.
+
+The MM workflow is documented in the bundled `middle-manager` skill, which is
+loaded into the spawned agent's context.
+
+## CEO (top-tier manager)
+
+The **CEO** is a top-tier ephemeral manager above the MM — a 3-level hierarchy
+**CEO (scheduled) → middle managers (spawned by CEO) → workers**. When
+`ceoEnabled` is true, the CEO **replaces the daemon's fixed-interval MM
+loop**: the CEO becomes the sole spawner of middle managers (the daemon's own
+MM timer skips spawning while `ceoEnabled`), and the MM reaper still runs as a
+safety net. With `ceoEnabled` false, the existing MM loop works unchanged
+(backward-compat).
+
+The CEO is a pure manager and does **no task administration** (no
+moving/unblocking/archiving tasks — that's the managers' job). Each pass it
+reviews the federation at a high level, decides which managed (favorited)
+projects need an MM pass, spawns MMs for them (one at a time, respecting the
+no-overlap guard), optionally tunes the favorites list, mails `human` a
+summary, and self-deletes via `mail_stop_self`.
+
+- **Config** (Board → Settings, or `set_board_config`): `ceoEnabled` (default
+  `false`), `ceoIntervalMin` (default `120`), `ceoModel` (optional),
+  `ceoMaxLifetimeMin` (default `15` — the CEO is a ~15-minute management
+  thread). Disabled by default; no spawn when the favorites list is empty.
+  `GET /api/ceo` exposes the live state (config + active sessions).
+- **Spawn an MM from the CEO.** `mail_spawn_agent({ cwd, mm: true })` spawns an
+  MM-marked session that runs the MM pass and self-deletes.
+- The CEO workflow is documented in the bundled `ceo` skill.
+
+## Self-deleting sessions (`mail_stop_self`)
+
+A daemon-spawned agent can tear down its **own** session + spawn-registry
+entry when its work is fully done, via the `mail_stop_self` tool. Workers,
+middle managers, CEOs, and any other daemon-spawned agent may call it; the
+daemon removes the registry entry immediately and kills the tmux session after
+a short grace so the tool response + any final mail flush first. **Refuses
+operator-launched interactive agents** (not in the spawn registry) — they stay
+alive unless explicitly stopped via the UI / `mail_stop_agent`.
+
+- The `task-board` skill instructs a board-dispatched worker to call it after
+  finishing its assigned task; the `middle-manager` and `ceo` skills call it
+  after their pass + completion summary.
+- Use `mail_stop_agent` (orchestrator-initiated) to tear down a worker that
+  went silent without self-exiting.
+
+## Ephemerality — every spawned agent is killed after its pass
+
+The 3-tier hierarchy — **CEO (scheduled) → middle managers (spawned by CEO) →
+workers** — is **ephemeral by invariant**: every daemon-spawned session is
+killed after its pass, regardless of whether it self-exits. Self-exit
+(`mail_stop_self`) is the primary, clean path; the **reaper is the enforced
+backstop**, not the primary path. If an agent doesn't self-exit — it hangs,
+crashes, gets stuck in a long turn, or simply forgets — the daemon force-kills
+its session at its tier's max-lifetime boundary and removes the spawn-registry
+entry. No daemon-spawned session in this hierarchy can outlive its pass.
+
+- **Per-tier lifetimes (Board → Settings, or `set_board_config`):**
+  `ceoMaxLifetimeMin` (default `15` — the CEO is a ~15-minute management
+  thread), `mmMaxLifetimeMin` (default `15`), `workerMaxLifetimeMin` (default
+  `30`; workers often run longer than a management pass).
+- **Liveness signal = the tmux session (the agent process) being alive** — via
+  `tmux has-session`. The reaper does NOT depend on the agent being responsive,
+  so an agent that is **alive but stuck** (in a long turn, not calling
+  `mail_stop_self`) is still caught: its tmux session is alive, so the reaper
+  takes the over-lifetime branch and force-kills it at its boundary.
+- **Cascade cleanup is independent per tier.** A reaped parent can never leave
+  orphans: each tier has its own reaper (`reapCeos`, `reapMiddleManagers`,
+  `reapWorkers`) and each daemon-spawned session is reaped by exactly one tier's
+  reaper regardless of who spawned it. When a CEO is reaped mid-pass, the
+  MM/worker it spawned are not tracked as its children — they're reaped on their
+  own lifetimes by the MM and worker reapers. No parent/child bookkeeping, no
+  leaked sessions.
+- The reapers run on every scheduler tick (default every 60 s). The MM tick runs
+  the worker + MM reapers every tick even when the CEO is the sole MM spawner,
+  so all three tiers are reaped either way.
 
 ## Board MCP server
 
@@ -356,6 +472,16 @@ and reconciled against live tmux on each daemon start, so a
 `/restart-mail-daemon` keeps tracking (and can still stop) previously-spawned
 agents.
 
+**Session ↔ agent name linkage.** The daemon names the tmux session and
+launches pi with `pi -n <session>`. The extension adopts that `-n` value as
+its mail federation display name (unless you've set a custom name with
+`mail_set_name`), so the registered agent name **matches** the tmux session
+name. That match is what lets the daemon link the registered `agentId` back to
+the tmux session, deliver the kickoff prompt, and show Terminal/Stop buttons on
+the right agent in the UI. (The internal `agentId` is a stable per-process UUID
+— distinct from the human-readable session name — and is tracked separately in
+the spawn registry.)
+
 ### Recent projects + favorites
 
 The daemon also remembers the project directories you spawn into, so you don't
@@ -415,8 +541,9 @@ needed.
 | `mail_set_name <name>` | Set your display name |
 | `mail_set_status <status>` | Set your status line (empty string clears it) |
 | `mail_restart_daemon` | Restart the shared mail daemon (briefly disconnects every agent; auto-reconnects) |
-| `mail_spawn_agent { cwd, name?, model?, kickoff?, favorite? }` | Spawn a fresh pi agent in a directory (tmux); returns its name. `favorite:true` stars the dir |
+| `mail_spawn_agent { cwd, name?, model?, kickoff?, favorite?, mm?, ceo? }` | Spawn a fresh pi agent in a directory (tmux); returns its name. `favorite:true` stars the dir; `mm:true`/`ceo:true` spawn a manager session |
 | `mail_stop_agent { name }` | Stop a daemon-spawned agent (kills its tmux session) |
+| `mail_stop_self` | A daemon-spawned agent tears down its own session + registry entry when done (workers, MM, CEO, any spawned agent; refuses operator-launched agents) |
 | `mail_list_projects` | List recent + favorite project dirs (history + starred), each tagged alive/not |
 | `mail_set_project_favorite { cwd, favorite }` | Star/unstar a project dir (shared federation-wide) |
 | `board_list_tasks` | Task board overview grouped by column (`mine: true` filters to you) |
@@ -520,6 +647,8 @@ pi-mail/                              Package root
 │   └── ui.html                       Web UI single-page app (served by the daemon)
 ├── skills/
 │   ├── mail-orchestrator/SKILL.md    Orchestrator skill, shipped with the plugin
+│   ├── middle-manager/SKILL.md      Middle-manager (scheduled) workflow skill
+│   ├── ceo/SKILL.md                  CEO (top-tier scheduled manager) skill
 │   └── task-board/SKILL.md           Task board workflow skill (agents + orchestrators)
 └── README.md                         This file
 ```
