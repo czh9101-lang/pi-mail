@@ -7,6 +7,8 @@
  */
 
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 import os from "node:os";
 import {
   messageLog,
@@ -46,7 +48,10 @@ import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
 import { attachTerminalUpgrade } from "./http-terminal.mjs";
 
-/** Static UI assets served from the extension dir (loaded once at boot). */
+/** Static UI assets served from the extension dir. The filename for each
+ *  route is the pathname without the leading slash (e.g. "/ui.css" ->
+ *  "ui.css"); files are re-read from disk on each request so edits take
+ *  effect after a browser refresh with no daemon restart. */
 const UI_ASSET_TYPES = {
   "/ui.css": "text/css; charset=utf-8",
   "/ui-core.js": "text/javascript; charset=utf-8",
@@ -110,14 +115,20 @@ function json(res, status, obj) {
 }
 
 /** Build the HTTP server: REST routes, static UI, and the /api/spawn/terminal
- *  WebSocket upgrade. The caller owns .listen(). `uiHtml` is the pre-loaded
- *  ui.html document (read by the daemon at boot). */
-export function createHttpServer({ uiHtml, uiAssets }) {
+ *  WebSocket upgrade. The caller owns .listen(). `uiHtmlPath` is the path to
+ *  ui.html and `uiDir` is the directory holding the split UI asset files;
+ *  both are re-read from disk on each request so UI edits show up after a
+ *  browser refresh without restarting the daemon. */
+export function createHttpServer({ uiHtmlPath, uiDir }) {
   const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
     if (req.method === "GET" && url.pathname === "/") {
-      if (!uiHtml) {
+      let uiHtml;
+      try {
+        uiHtml = fs.readFileSync(uiHtmlPath, "utf8");
+      } catch (e) {
+        log(`ui.html not found at ${uiHtmlPath}: ${e.message}`);
         json(res, 500, { error: "ui.html not available" });
         return;
       }
@@ -126,10 +137,17 @@ export function createHttpServer({ uiHtml, uiAssets }) {
       return;
     }
 
-    // Split UI assets (css/js) served as separate files so ui.html stays small.
+    // Split UI assets (css/js) served as separate files so ui.html stays
+    // small. Re-read from disk on each request so edits take effect after a
+    // browser refresh with no daemon restart.
     if (req.method === "GET" && url.pathname in UI_ASSET_TYPES) {
-      const body = uiAssets && uiAssets[url.pathname];
-      if (!body) { json(res, 404, { error: "asset not found" }); return; }
+      let body;
+      try {
+        body = fs.readFileSync(path.join(uiDir, url.pathname.slice(1)), "utf8");
+      } catch (e) {
+        json(res, 404, { error: "asset not found" });
+        return;
+      }
       res.writeHead(200, { "Content-Type": UI_ASSET_TYPES[url.pathname] });
       res.end(body);
       return;
