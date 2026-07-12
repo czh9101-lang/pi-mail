@@ -36,6 +36,7 @@ import {
 } from "./spawn.mjs";
 import { mmTick, mmState, mmKickoff } from "./middle-manager.mjs";
 import { ceoTick, ceoState, ceoKickoff } from "./ceo.mjs";
+import { chatPost, chatGet, chatState } from "./chat.mjs";
 import os from "node:os";
 
 // ── Message handler ───────────────────────────────────────────────────────────
@@ -324,6 +325,27 @@ export function handleMessage(agentId, msg, socket) {
     case "ceo_tick": {
       const r = ceoTick(typeof msg.now === "number" ? msg.now : Date.now(), !!msg.force);
       reply({ type: "ok", ...r });
+      break;
+    }
+
+    // ── MCP project chat ───────────────────────────────────────────────────
+    // Multi-turn chat with a project's spawned agent over pi-mail. chat_post
+    // spawns/reuses a chat worker and delivers the question; chat_get blocks
+    // until the agent replies. See lib/chat.mjs + http.mjs /api/chat/*.
+    case "chat_post": {
+      chatPost({ cwd: msg.cwd, message: msg.message, threadId: msg.threadId, wait: msg.wait !== false, timeoutMs: msg.timeoutMs })
+        .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", ...r }))
+        .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
+      break;
+    }
+    case "chat_get": {
+      chatGet({ threadId: msg.threadId, timeoutMs: msg.timeoutMs })
+        .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", ...r }))
+        .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
+      break;
+    }
+    case "chat_state": {
+      reply({ type: "chat", ...chatState() });
       break;
     }
 

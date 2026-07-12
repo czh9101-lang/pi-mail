@@ -132,6 +132,12 @@ export let board = {
     // is the hard safety bound: a CEO that does not self-exit within 15 min is
     // force-killed by the reaper. See lib/ceo.mjs + README ephemerality.
     ceoMaxLifetimeMin: 15,
+    // MCP project chat: a chat worker (spawned by the chat_post MCP tool) that
+    // has had no communication for this many minutes is auto-killed (idle
+    // reaper in lib/chat.mjs). Chat workers are excluded from the MM worker
+    // reaper so their lifetime is governed by activity, not a fixed bound.
+    // Default 60 (one hour), per the feature spec. See lib/chat.mjs.
+    chatIdleMin: 60,
   },
   /** @type {BoardColumn[]} */
   columns: DEFAULT_COLUMNS,
@@ -171,7 +177,7 @@ export function loadBoard() {
       for (const k of ["nudgeEnabled", "mmEnabled", "ceoEnabled"]) {
         if (typeof saved.config?.[k] === "boolean") board.config[k] = saved.config[k];
       }
-      for (const k of ["nudgeIntervalMin", "mmIntervalMin", "mmMaxLifetimeMin", "workerMaxLifetimeMin", "ceoIntervalMin", "ceoMaxLifetimeMin"]) {
+      for (const k of ["nudgeIntervalMin", "mmIntervalMin", "mmMaxLifetimeMin", "workerMaxLifetimeMin", "ceoIntervalMin", "ceoMaxLifetimeMin", "chatIdleMin"]) {
         if (typeof saved.config?.[k] === "number" && Number.isFinite(saved.config[k])) board.config[k] = saved.config[k];
       }
       if (typeof saved.config?.mmModel === "string") board.config.mmModel = saved.config.mmModel;

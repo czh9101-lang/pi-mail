@@ -387,6 +387,26 @@ way an agent does. Board operations run as the `human` agent
 | `get_board_config` / `set_board_config({ config })` | read/write board + Jira config |
 | `sync_board` | trigger a manual Jira sync |
 
+#### Project chat tools
+
+The MCP server also exposes **project chat** tools that let an MCP client hold
+a multi-turn conversation with a project's spawned agent. All traffic flows
+over pi-mail: `chat_post` spawns (or reuses) a "chat worker" agent in the
+target project cwd, delivers the question as mail, and (by default) blocks
+until the agent replies; `chat_get` fetches a thread's mail history, blocking
+non-busily until the agent has answered. Chat workers are auto-killed after a
+configurable idle timeout (`chatIdleMin`, default 60 min) with no
+communication.
+
+| MCP tool | Description |
+|---|---|
+| `chat_post({ cwd, message, thread_id?, wait?, timeout_ms? })` | Send a question to a project's agent. No `thread_id` ⇒ starts a new thread (spawns a chat worker) and returns `thread_id`. Existing `thread_id` ⇒ continues the conversation. `wait:true` (default) blocks and returns the answer; `wait:false` returns the `thread_id` immediately (fetch the answer later with `chat_get`). |
+| `chat_get({ thread_id, timeout_ms? })` | Get a chat thread's mail history (oldest-first). Blocks until the LAST message in the thread is a reply from the agent — no polling. |
+
+Both tools are also reachable as daemon socket RPCs (`chat_post` / `chat_get` /
+`chat_state`) and HTTP endpoints (`POST /api/chat/post`, `POST /api/chat/get`,
+`GET /api/chat`).
+
 ### Build & run
 
 The HTTP MCP server needs no separate start — it comes up with the daemon.

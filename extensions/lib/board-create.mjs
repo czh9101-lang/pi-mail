@@ -193,6 +193,12 @@ export function boardSetConfig({ config, columns } = {}) {
       board.config.ceoMaxLifetimeMin = Math.max(1, Math.floor(config.ceoMaxLifetimeMin));
     }
     if (typeof config.ceoModel === "string") board.config.ceoModel = config.ceoModel.trim();
+    // MCP project chat idle kill bound (per-board). A chat worker with no
+    // communication for this many minutes is killed by the chat idle reaper
+    // (lib/chat.mjs). Default 60 (one hour).
+    if (typeof config.chatIdleMin === "number" && Number.isFinite(config.chatIdleMin)) {
+      board.config.chatIdleMin = Math.max(1, Math.floor(config.chatIdleMin));
+    }
     // Empty token means "keep the existing one" so the UI never has to echo it.
     if (typeof config.apiToken === "string" && config.apiToken.trim()) {
       board.config.apiToken = config.apiToken.trim();

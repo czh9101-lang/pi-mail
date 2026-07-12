@@ -154,6 +154,15 @@ export function deliverMail(toAgentId, message, opts = {}) {
   // Record in history regardless of recipient (including the human).
   logDelivery(message, toAgentId, opts);
 
+  // Notify delivery hooks (e.g. the MCP chat module's blocking chat_get) so a
+  // thread waiter can resolve the moment a matching reply lands. Best-effort:
+  // a throwing hook never blocks delivery.
+  if (deliveryHooks.length) {
+    for (const hook of deliveryHooks) {
+      try { hook(message, toAgentId); } catch (e) { log(`delivery hook error: ${e?.message ?? String(e)}`); }
+    }
+  }
+
   // The human has no live mailbox or socket — its inbox is the history slice
   // where toId === HUMAN_AGENT_ID && !archived.
   if (toAgentId === HUMAN_AGENT_ID) return;
@@ -170,6 +179,16 @@ export function deliverMail(toAgentId, message, opts = {}) {
   if (agent) {
     setImmediate(() => send(agent.conn, { type: "new_mail", message }));
   }
+}
+
+/** Delivery hooks — notified (best-effort) whenever a message is delivered, so a
+ *  module (the MCP chat module's blocking chat_get) can react to a reply the
+ *  moment it lands without polling. A hook receives (message, toAgentId). */
+const deliveryHooks = [];
+export function setDeliveryHook(fn) {
+  if (typeof fn !== "function") return;
+  deliveryHooks.push(fn);
+  return () => { const i = deliveryHooks.indexOf(fn); if (i >= 0) deliveryHooks.splice(i, 1); };
 }
 
 export function makeMail(fromAgentId, subject, body, extra = {}) {

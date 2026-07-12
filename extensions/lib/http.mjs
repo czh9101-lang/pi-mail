@@ -43,6 +43,7 @@ import {
   projectsState,
 } from "./spawn.mjs";
 import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
+import { chatPost, chatGet, chatState } from "./chat.mjs";
 import { attachTerminalUpgrade } from "./http-terminal.mjs";
 
 /** Static UI assets served from the extension dir (loaded once at boot). */
@@ -281,6 +282,7 @@ export function createHttpServer({ uiHtml, uiAssets }) {
           ceoIntervalMin: board.config.ceoIntervalMin ?? 120,
           ceoModel: board.config.ceoModel ?? "",
           ceoMaxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
+          chatIdleMin: board.config.chatIdleMin ?? 60,
         },
         columns: board.columns,
       });
@@ -369,6 +371,34 @@ export function createHttpServer({ uiHtml, uiAssets }) {
       const body = await readJsonBody(req);
       const r = stopAgent({ name: body.name });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true });
+      return;
+    }
+
+    // ── MCP project chat endpoints (actor: the human operator / MCP client) ───
+    // Multi-turn chat with a project's spawned agent over pi-mail. chat_post
+    // spawns (or reuses) a chat worker for the cwd and delivers the question as
+    // mail; chat_get returns the thread history, blocking until the agent has
+    // replied (no polling). See lib/chat.mjs.
+
+    if (req.method === "GET" && url.pathname === "/api/chat") {
+      json(res, 200, chatState());
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/chat/post") {
+      const body = await readJsonBody(req);
+      if (!body.cwd || typeof body.cwd !== "string") { json(res, 400, { ok: false, error: "Missing 'cwd'" }); return; }
+      if (!body.message || typeof body.message !== "string") { json(res, 400, { ok: false, error: "Missing 'message'" }); return; }
+      const r = await chatPost({ cwd: body.cwd, message: body.message, threadId: body.threadId, wait: body.wait !== false, timeoutMs: body.timeoutMs });
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, ...r });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/chat/get") {
+      const body = await readJsonBody(req);
+      if (!body.threadId || typeof body.threadId !== "string") { json(res, 400, { ok: false, error: "Missing 'threadId'" }); return; }
+      const r = await chatGet({ threadId: body.threadId, timeoutMs: body.timeoutMs });
+      json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, ...r });
       return;
     }
 

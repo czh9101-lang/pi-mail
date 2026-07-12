@@ -17,7 +17,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { BoardBackend, BoardOpResponse } from "./types.js";
+import type { BoardBackend, BoardOpResponse, ChatMessage } from "./types.js";
 import { httpBackend } from "./http.js";
 import { findTask, renderBoard, renderOpResult, renderTask } from "./format.js";
 
@@ -37,6 +37,22 @@ function toolError(err: unknown): { content: [{ type: "text"; text: string }]; i
 /** ok result helper. */
 function ok(text: string) {
   return { content: [{ type: "text" as const, text }] };
+}
+
+/** Render a chat thread's history as readable text. */
+function renderChatHistory(history: ChatMessage[] | undefined, threadId: string | undefined): string {
+  if (!history || history.length === 0) return `Thread ${threadId ?? "?"}: (no messages yet)`;
+  const lines = [`🧵 Thread ${threadId ?? "?"} — ${history.length} message(s)`, ""];
+  for (const m of history) {
+    const tag = m.direction === "reply" ? "🤖 agent" : "🙋 you";
+    const when = new Date(m.timestamp).toLocaleString();
+    lines.push(`${tag} (${when}):`);
+    lines.push(m.body);
+    lines.push("");
+  }
+  const last = history[history.length - 1];
+  lines.push(last.direction === "reply" ? "✅ Answered." : "⏳ Waiting for the agent's reply…");
+  return lines.join("\n").trimEnd();
 }
 
 /** Build the MCP server with all board tools registered.
@@ -316,6 +332,58 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       try {
         const resp = await http.syncBoard();
         return ok(`✅ Board sync triggered\n${JSON.stringify(resp, null, 2)}`);
+      } catch (e) {
+        return toolError(e);
+      }
+    },
+  );
+
+  // ── chat_post ─────────────────────────────────────────────────────────────
+  // Multi-turn chat with a project's spawned agent over pi-mail. Spawns (or
+  // reuses) a chat worker for the project cwd, delivers the question, and
+  // (by default) blocks until the agent replies. See lib/chat.mjs.
+  server.tool(
+    "chat_post",
+    "Send a question to a project's chat agent over pi-mail. With no thread_id, starts a new thread (spawns a chat worker for the project cwd) and returns a thread_id. With an existing thread_id, continues the multi-turn conversation. By default (wait=true) blocks until the agent replies and returns the answer + thread_id; pass wait:false to get the thread_id immediately and fetch the answer later with chat_get. The agent is auto-killed after 1h of no communication.",
+    {
+      cwd: z.string().describe("Absolute working directory of the project to chat with"),
+      message: z.string().describe("The question / message to send to the project's agent"),
+      thread_id: z.string().optional().describe("Existing thread id to continue a multi-turn chat; omit to start a new thread"),
+      wait: z.boolean().optional().describe("When true (default), block until the agent replies and return the answer. When false, return the thread_id immediately."),
+      timeout_ms: z.number().optional().describe("Per-request wait timeout in ms (default 120000). Only used when wait is true."),
+    },
+    async ({ cwd, message, thread_id, wait, timeout_ms }) => {
+      try {
+        const r = await http.chatPost({ cwd, message, threadId: thread_id, wait: wait !== false, timeoutMs: timeout_ms });
+        if (r.error) return ok(`❌ ${r.error}`);
+        if (wait === false || (!r.answer && !r.history)) {
+          return ok(`🧵 Thread ${r.threadId} — question sent. Use chat_get with this thread_id to fetch the answer.`);
+        }
+        const body = r.answer ?? r.history?.[r.history.length - 1]?.body ?? "";
+        return ok(`🧵 Thread ${r.threadId}\n\n${renderChatHistory(r.history, r.threadId)}\n\n── answer ──\n${body}`);
+      } catch (e) {
+        return toolError(e);
+      }
+    },
+  );
+
+  // ── chat_get ──────────────────────────────────────────────────────────────
+  // Fetch a chat thread's mail history. Blocks (non-busy, event-driven) until
+  // the LAST message in the thread is a reply from the agent — so no polling:
+  // the caller waits only when an answer is pending, and resolves the moment it
+  // lands. Returns the full thread history (oldest-first).
+  server.tool(
+    "chat_get",
+    "Get the mail history for a chat thread. Blocks until the last message in the thread is an answer from the agent (so no polling — the call resolves the moment the agent replies). Returns the full thread history, oldest-first. Use the thread_id from a prior chat_post (with wait:false).",
+    {
+      thread_id: z.string().describe("Thread id (from a prior chat_post) whose history to fetch"),
+      timeout_ms: z.number().optional().describe("Per-request wait timeout in ms (default 120000)."),
+    },
+    async ({ thread_id, timeout_ms }) => {
+      try {
+        const r = await http.chatGet({ threadId: thread_id, timeoutMs: timeout_ms });
+        if (r.error) return ok(`❌ ${r.error}`);
+        return ok(renderChatHistory(r.history, r.threadId));
       } catch (e) {
         return toolError(e);
       }

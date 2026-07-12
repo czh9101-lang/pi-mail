@@ -47,7 +47,7 @@ esac
 }
 
 /** Start an isolated daemon. Returns the child process (caller owns its lifetime). */
-export function startDaemon({ tmpHome, tmpState, fakeTmux, sockPath }) {
+export function startDaemon({ tmpHome, tmpState, fakeTmux, sockPath, envExtra } = {}) {
   return new Promise((resolve, reject) => {
     const proc = pSpawn(process.execPath, [DAEMON], {
       env: {
@@ -60,6 +60,7 @@ export function startDaemon({ tmpHome, tmpState, fakeTmux, sockPath }) {
         PI_MAIL_SPAWN_TIMEOUT: "1500", // fast register-wait for the timeout test
         TMUX_STATE_DIR: tmpState,
         PATH: `${path.dirname(fakeTmux)}:${process.env.PATH}`,
+        ...(envExtra || {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

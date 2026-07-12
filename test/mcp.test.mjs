@@ -158,6 +158,7 @@ test("tools/list exposes the board tools", async () => {
     "board_list_tasks", "board_get_task", "board_move_task", "board_comment_task",
     "board_progress_task", "board_assign_task", "board_create_task", "board_split_task",
     "board_update_task", "board_flag_task", "get_board_config", "set_board_config", "sync_board",
+    "chat_post", "chat_get",
   ]) {
     assert.ok(names.includes(expected), `missing tool ${expected}`);
   }

@@ -119,6 +119,7 @@ import { handleMessage } from "./lib/protocol.mjs";
 import { createHttpServer } from "./lib/http.mjs";
 import { startMiddleManagerLoop } from "./lib/middle-manager.mjs";
 import { startCeoLoop } from "./lib/ceo.mjs";
+import { startChatLoop } from "./lib/chat.mjs";
 
 // ── Config (server/UI-only) ────────────────────────────────────────────────
 
@@ -343,6 +344,13 @@ startMiddleManagerLoop();
 // runs. Also reaps dead/over-lifetime CEO sessions. Disabled by default. See
 // lib/ceo.mjs.
 startCeoLoop();
+
+// MCP project chat — installs the mail delivery hook (so blocking chat_get /
+// chat_post(wait) resolve the moment a reply lands) and starts the idle reaper
+// that kills chat workers after board.config.chatIdleMin (default 60 min) of no
+// communication. Chat workers are spawned by the chat_post MCP tool and are
+// excluded from the MM worker reaper. See lib/chat.mjs.
+startChatLoop();
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 

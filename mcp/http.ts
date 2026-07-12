@@ -11,7 +11,7 @@
  * http://127.0.0.1:${PI_MAIL_UI_PORT || 1994}.
  */
 
-import type { BoardState, BoardOpResponse, BoardBackend, BoardListOpts, CreateTaskBody, UpdateTaskBody } from "./types.js";
+import type { BoardState, BoardOpResponse, BoardBackend, BoardListOpts, CreateTaskBody, UpdateTaskBody, ChatPostBody, ChatGetBody, ChatResult } from "./types.js";
 
 /** Resolve the daemon base URL from env (with sensible defaults). */
 export function daemonBaseUrl(): string {
@@ -98,6 +98,18 @@ export async function flagTask(taskId: string, reason?: string, clear?: boolean)
   return request<BoardOpResponse>("POST", "/api/board/flag", { taskId, reason, clear });
 }
 
+// ── MCP project chat ─────────────────────────────────────────────────────────
+
+/** POST /api/chat/post — send a question to a project's chat agent. */
+export async function chatPost(body: ChatPostBody): Promise<ChatResult> {
+  return request<ChatResult>("POST", "/api/chat/post", body);
+}
+
+/** POST /api/chat/get — fetch a chat thread's history (blocks until answered). */
+export async function chatGet(body: ChatGetBody): Promise<ChatResult> {
+  return request<ChatResult>("POST", "/api/chat/get", body);
+}
+
 /** Default backend: a thin HTTP client over the daemon's `/api/board*` endpoints. */
 export const httpBackend: BoardBackend = {
   getBoard,
@@ -111,6 +123,8 @@ export const httpBackend: BoardBackend = {
   createTask,
   updateTask,
   flagTask,
+  chatPost,
+  chatGet,
 };
 
 // ── internals ─────────────────────────────────────────────────────────────────

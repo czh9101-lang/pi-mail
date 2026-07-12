@@ -123,13 +123,14 @@ function reapMiddleManagers(now = Date.now()) {
   }
 }
 
-/** Daemon-spawned WORKER sessions: plain spawns (no mm/ceo flag) — i.e. agents
- *  spawned by an MM, the CEO, the board UI, or `mail_spawn_agent` that are
- *  not themselves management passes. Workers are the third tier of the
- *  CEO → MM → worker hierarchy. */
+/** Daemon-spawned WORKER sessions: plain spawns (no mm/ceo/chat flag) — i.e.
+ *  agents spawned by an MM, the CEO, the board UI, or `mail_spawn_agent` that
+ *  are not themselves management passes and not chat workers. Workers are the
+ *  third tier of the CEO → MM → worker hierarchy. Chat workers (chat:true) are
+ *  excluded — they have their own idle reaper (lib/chat.mjs). */
 function workerSessions() {
   return Object.entries(spawnRegistry.sessions)
-    .filter(([, s]) => !s.mm && !s.ceo)
+    .filter(([, s]) => !s.mm && !s.ceo && !s.chat)
     .map(([name, s]) => ({ name, ...s }));
 }
 

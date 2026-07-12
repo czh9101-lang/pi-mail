@@ -126,10 +126,57 @@ export interface UpdateTaskBody {
   description?: string;
 }
 
+// ── MCP project chat ─────────────────────────────────────────────────────────
+
+/** A single message in a chat thread's history. */
+export interface ChatMessage {
+  id: string;
+  /** "question" (human→agent) or "reply" (agent→human). */
+  direction: "question" | "reply";
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  timestamp: number;
+}
+
+/** Body for chat_post (mirrors POST /api/chat/post). */
+export interface ChatPostBody {
+  /** Project working directory to chat with. */
+  cwd: string;
+  /** The question / message to send. */
+  message: string;
+  /** Existing thread id to continue a multi-turn chat; omit to start a new thread. */
+  threadId?: string;
+  /** When true (default), block until the agent replies and return the answer. */
+  wait?: boolean;
+  /** Per-request wait timeout in ms (default 120000). */
+  timeoutMs?: number;
+}
+
+/** Body for chat_get (mirrors POST /api/chat/get). */
+export interface ChatGetBody {
+  /** Thread id whose history to fetch. */
+  threadId: string;
+  /** Per-request wait timeout in ms (default 120000). */
+  timeoutMs?: number;
+}
+
+/** Result from chat_post / chat_get (mirrors the daemon's response). */
+export interface ChatResult {
+  ok?: boolean;
+  error?: string;
+  threadId?: string;
+  answer?: string;
+  history?: ChatMessage[];
+  /** True when the latest message in the thread is a reply from the agent. */
+  answered?: boolean;
+}
+
 /**
  * The backend the MCP server talks to. The default implementation
  * (`http.ts` → `httpBackend`) is a thin HTTP client over the daemon's
- * `/api/board*` endpoints. When the MCP server is hosted *inside* the
+ * `/api/board*` + `/api/chat/*` endpoints. When the MCP server is hosted *inside* the
  * daemon (the daemon serves `/mcp` directly), the daemon supplies an
  * in-process backend whose methods call the board functions without an
  * HTTP round-trip. The method shapes mirror the daemon's HTTP response
@@ -147,4 +194,7 @@ export interface BoardBackend {
   createTask(body: CreateTaskBody): Promise<BoardOpResponse>;
   updateTask(taskId: string, body: UpdateTaskBody): Promise<BoardOpResponse>;
   flagTask(taskId: string, reason?: string, clear?: boolean): Promise<BoardOpResponse>;
+  // ── MCP project chat ────────────────────────────────────────────────────
+  chatPost(body: ChatPostBody): Promise<ChatResult>;
+  chatGet(body: ChatGetBody): Promise<ChatResult>;
 }

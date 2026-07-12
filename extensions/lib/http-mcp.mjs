@@ -33,6 +33,7 @@ import {
   boardSetConfig,
 } from "./board-ops.mjs";
 import { syncBoard } from "./jira.mjs";
+import { chatPost, chatGet } from "./chat.mjs";
 
 const HUMAN_AGENT_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -80,6 +81,7 @@ const inProcessBoardBackend = {
         ceoIntervalMin: board.config.ceoIntervalMin ?? 120,
         ceoModel: board.config.ceoModel ?? "",
         ceoMaxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
+        chatIdleMin: board.config.chatIdleMin ?? 60,
       },
       columns: board.columns,
     };
@@ -122,6 +124,15 @@ const inProcessBoardBackend = {
   async flagTask(taskId, reason, clear) {
     const r = boardFlag(HUMAN_AGENT_ID, taskId, reason, !!clear);
     return r.error ? { ok: false, error: r.error } : { ok: true, warning: r.warning };
+  },
+  // ── MCP project chat (in-process: calls lib/chat.mjs directly) ───────────
+  async chatPost(body) {
+    const r = await chatPost({ cwd: body.cwd, message: body.message, threadId: body.threadId, wait: body.wait !== false, timeoutMs: body.timeoutMs });
+    return r.error ? { ok: false, error: r.error } : { ok: true, ...r };
+  },
+  async chatGet(body) {
+    const r = await chatGet({ threadId: body.threadId, timeoutMs: body.timeoutMs });
+    return r.error ? { ok: false, error: r.error } : { ok: true, ...r };
   },
 };
 

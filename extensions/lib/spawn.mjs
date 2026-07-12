@@ -110,7 +110,7 @@ function loadSpawn() {
  * Spawn a fresh pi agent in a tmux session.
  * @returns {{ ok?: true, name?: string, agentId?: string, warning?: string, error?: string }}
  */
-function spawnAgent({ cwd, name, model, kickoff, favorite, mm, ceo }) {
+function spawnAgent({ cwd, name, model, kickoff, favorite, mm, ceo, chat }) {
   const v = validateSpawnCwd(cwd);
   if (v.error) return { error: v.error };
   const dir = v.resolved;
@@ -154,10 +154,16 @@ function spawnAgent({ cwd, name, model, kickoff, favorite, mm, ceo }) {
     // scheduled). Lets the MM scheduler detect live MM sessions (no overlap)
     // and the reaper bound their lifetime. See lib/middle-manager.mjs.
     // `ceo: true` marks a daemon-spawned CEO session (top-tier manager). See
-    // lib/ceo.mjs. Both are ephemeral management passes, not real project
-    // work, so they don't pollute the recent-projects list.
+    // lib/ceo.mjs. `chat: true` marks a daemon-spawned chat worker — an agent
+    // brought up by the MCP chat_post tool to answer questions about a
+    // project. Chat workers are reaped by the chat module's own 1h-idle reaper
+    // (lib/chat.mjs), so they're excluded from the MM worker reaper. Both MM
+    // and CEO are ephemeral management passes, not real project work, so they
+    // don't pollute the recent-projects list; chat workers DO (they're real
+    // project sessions). See lib/chat.mjs.
     mm: !!mm,
     ceo: !!ceo,
+    chat: !!chat,
   };
   // Track the project dir in recent history (shared across the federation)
   // and optionally star it as a favorite. Skipped for middle-manager + CEO
@@ -354,6 +360,7 @@ function spawnState() {
     alive: tmuxSessionExists(name),
     mm: !!s.mm,
     ceo: !!s.ceo,
+    chat: !!s.chat,
   }));
   return { sessions, projects: projectsState() };
 }
@@ -370,6 +377,7 @@ export {
   setFavorite,
   projectsState,
   schedulePersistSpawn,
+  waitForRegistration,
 };
 
 // Re-export the shared path/tmux helpers so existing importers (http-terminal,
