@@ -39,6 +39,53 @@ const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 
+// ── Theme (dark / light / system) ─────────────────────────────────────────────
+// Persisted via localStorage("pi-mail-theme"): "dark" | "light" | "system".
+// Default is dark (no stored value → dark, no data-theme attribute), preserving
+// the existing UX. "system" follows the OS prefers-color-scheme and updates
+// live when the OS theme changes. The toggle (#theme-toggle) cycles
+// dark 🌙 → light ☀️ → system 🖥️ → dark.
+const THEME_KEY = "pi-mail-theme";
+const THEME_ICONS = { dark: "🌙", light: "☀️", system: "🖥️" };
+/** Resolve a stored theme to the effective light/dark value. */
+function resolvedTheme(theme) {
+  if (theme === "light") return "light";
+  if (theme === "system")
+    return (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+  return "dark"; // default
+}
+function currentTheme() {
+  const t = localStorage.getItem(THEME_KEY);
+  return (t === "light" || t === "system") ? t : "dark";
+}
+function applyTheme(theme) {
+  const light = resolvedTheme(theme) === "light";
+  if (light) document.documentElement.setAttribute("data-theme", "light");
+  else document.documentElement.removeAttribute("data-theme");
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.textContent = THEME_ICONS[theme] || THEME_ICONS.dark;
+    btn.title = "Theme: " + theme + " (click to switch)";
+    btn.setAttribute("aria-label", "Toggle theme (current: " + theme + ")");
+  }
+}
+function toggleTheme() {
+  const order = ["dark", "light", "system"];
+  const next = order[(order.indexOf(currentTheme()) + 1) % order.length];
+  if (next === "dark") localStorage.removeItem(THEME_KEY);
+  else localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+}
+// When in system mode, react to OS theme changes without a reload.
+if (window.matchMedia) {
+  matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if (currentTheme() === "system") applyTheme("system");
+  });
+}
+// Apply the persisted theme as early as possible to avoid a flash of the wrong
+// theme. This runs once at script load (ui-core.js is the first UI script).
+applyTheme(currentTheme());
+
 function fmtTime(ts) {
   if (!ts) return "—";
   const d = new Date(ts);
@@ -325,7 +372,7 @@ function renderAgents() {
       prevGroup = grp;
       const gr = el("tr"); gr.className = "group-row"; const gtd = el("td"); gtd.colSpan = 8;
       gtd.style.color = "var(--accent)";
-      gtd.style.background = "#11161d";
+      gtd.style.background = "var(--group-bg)";
       gtd.textContent = (a.isHuman ? "👤 " : "📁 ") + grp + (a.cwd && !a.isHuman ? "   " + a.cwd : "");
       gr.appendChild(gtd); tbody.appendChild(gr);
     }

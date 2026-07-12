@@ -12,6 +12,44 @@
     --warning: #d29922;
     --error: #f85149;
     --broadcast: #bc8cff;
+    /* Derived surfaces (theme-aware) */
+    --hover: #1a2029;       /* row/item hover */
+    --active: #1f2733;      /* active nav/conv/toast */
+    --group-bg: #11161d;    /* agents table group-row header */
+    --header-grad1: #1b2129;
+    --header-grad2: #161b22;
+    --overlay: rgba(0,0,0,0.6); /* modal/overlay backdrop */
+    --body-text: #c9d1d9;   /* monospace message body text */
+    --idle-bg: #11281f;     /* idle/spawn badge background */
+    --idle-border: #1f4d33; /* idle/spawn badge border */
+    --on-accent: #04110f;   /* text on accent-colored buttons/badges */
+  }
+  /* Light theme — opt in via <html data-theme="light">. Dark (:root above)
+     remains the default, so existing UX is unchanged until toggled. */
+  :root[data-theme="light"] {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --panel2: #f0f2f5;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --dim: #59636e;
+    --muted: #818b98;
+    --accent: #0969da;
+    --accent2: #0550ae;
+    --success: #1a7f37;
+    --warning: #9a6700;
+    --error: #cf222e;
+    --broadcast: #8250df;
+    --hover: #e8eaed;
+    --active: #ddf0ff;
+    --group-bg: #eaeef2;
+    --header-grad1: #f0f2f5;
+    --header-grad2: #ffffff;
+    --overlay: rgba(140,149,159,0.4);
+    --body-text: #24292f;
+    --idle-bg: #dafbe1;
+    --idle-border: #aceebb;
+    --on-accent: #ffffff;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -28,7 +66,7 @@
     gap: 16px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, #1b2129, #161b22);
+    background: linear-gradient(180deg, var(--header-grad1), var(--header-grad2));
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header .sub { color: var(--dim); font-size: 12px; }
@@ -44,8 +82,10 @@
     cursor: pointer;
     font-size: 13px;
   }
-  nav button.active { color: var(--text); border-color: var(--accent); background: #1f2733; }
+  nav button.active { color: var(--text); border-color: var(--accent); background: var(--active); }
   nav button:hover { color: var(--text); }
+  /* Theme toggle sits at the end of the nav; same styling as nav buttons. */
+  .theme-toggle { min-width: 40px; }
   main { flex: 1; overflow: auto; padding: 16px; }
   .hidden { display: none !important; }
 
@@ -60,7 +100,7 @@
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  tr:hover td { background: #1a2029; }
+  tr:hover td { background: var(--hover); }
   td .you { color: var(--accent); }
   td .human-tag { color: var(--broadcast); }
   .ctx { font-variant-numeric: tabular-nums; }
@@ -78,12 +118,12 @@
   .compose textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .compose .row { display: flex; gap: 8px; align-items: center; }
   .btn {
-    background: var(--accent); color: #04110f; border: none; border-radius: 6px;
+    background: var(--accent); color: var(--on-accent); border: none; border-radius: 6px;
     padding: 8px 14px; min-height: 40px; cursor: pointer; font-weight: 600; font-size: 13px;
   }
   .btn:hover { filter: brightness(1.08); }
   .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
-  .btn.broadcast { background: var(--broadcast); color: #120a1a; }
+  .btn.broadcast { background: var(--broadcast); color: var(--on-accent); }
   .btn:disabled { opacity: .5; cursor: default; }
   .checkbox { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 13px; }
   /* Always-visible recipient picker — <datalist> renders nothing on iOS Safari */
@@ -105,18 +145,18 @@
   .mb-nav-head h2 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   .mb-nav-list { overflow-y: auto; flex: 1; padding: 4px 6px; }
   .mb-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
-  .mb-nav-item:hover { background: #1a2029; }
-  .mb-nav-item.active { background: #1f2733; color: var(--accent); font-weight: 600; }
+  .mb-nav-item:hover { background: var(--hover); }
+  .mb-nav-item.active { background: var(--active); color: var(--accent); font-weight: 600; }
   .mb-nav-ico { font-size: 14px; }
   .mb-nav-lbl { flex: 1; }
-  .mb-nav-count { background: var(--accent); color: #0d1117; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 7px; min-width: 18px; text-align: center; line-height: 18px; }
+  .mb-nav-count { background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 7px; min-width: 18px; text-align: center; line-height: 18px; }
   .mb-left-head { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
   .mb-left-head h2 { margin: 0; }
   .mb-left .checkbox { padding: 6px 12px; border-bottom: 1px solid var(--border); }
   .mb-conv-list { overflow-y: auto; flex: 1; min-height: 0; }
   .mb-conv-row { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
-  .mb-conv-row:hover { background: #1a2029; }
-  .mb-conv-row.active { background: #1f2733; border-left: 3px solid var(--accent); }
+  .mb-conv-row:hover { background: var(--hover); }
+  .mb-conv-row.active { background: var(--active); border-left: 3px solid var(--accent); }
   .mb-conv-name { font-weight: 600; font-size: 13px; }
   .mb-conv-snippet { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
   .mb-conv-ts { color: var(--muted); font-size: 11px; margin-top: 2px; }
@@ -143,7 +183,7 @@
   .msg .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .msg .subj { font-weight: 600; }
   .msg .meta { color: var(--dim); font-size: 12px; }
-  .msg .body { white-space: pre-wrap; margin-top: 8px; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .msg .body { white-space: pre-wrap; margin-top: 8px; color: var(--body-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
   .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--dim); }
   .badge.broadcast { color: var(--broadcast); border-color: var(--broadcast); }
   .badge.newsession { color: var(--warning); border-color: var(--warning); }
@@ -159,7 +199,7 @@
      assignment, inline where you assign (mirrors Agents-tab statuses). */
   .idle-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
   .idle-row .idle-label { color: var(--dim); }
-  .idle-row .idle-chip { background: #11281f; color: var(--success); border: 1px solid #1f4d33; border-radius: 999px; padding: 2px 9px; }
+  .idle-row .idle-chip { background: var(--idle-bg); color: var(--success); border: 1px solid var(--idle-border); border-radius: 999px; padding: 2px 9px; }
   .idle-row .idle-none { color: var(--muted); font-style: italic; }
   .board { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 8px; }
   .bcol { flex: 0 0 280px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
@@ -207,7 +247,7 @@
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
   select.agentpick { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 16px; min-width: 260px; }
-  .toast { position: fixed; bottom: 16px; right: 16px; background: #1f2733; border: 1px solid var(--accent); color: var(--text); padding: 10px 14px; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  .toast { position: fixed; bottom: 16px; right: 16px; background: var(--active); border: 1px solid var(--accent); color: var(--text); padding: 10px 14px; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   .toast.err { border-color: var(--error); }
   a { color: var(--accent2); }
 
@@ -230,7 +270,7 @@
     tbody td::before { content: attr(data-label); color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
     /* Section header rows */
     tbody tr.group-row { background: transparent; border: none; margin: 10px 0 2px; padding: 0; }
-    tbody tr.group-row td { background: #11161d; border-radius: 6px; padding: 6px 10px; justify-content: flex-start; }
+    tbody tr.group-row td { background: var(--group-bg); border-radius: 6px; padding: 6px 10px; justify-content: flex-start; }
     tbody tr.group-row td::before { content: none; }
 
     .msg .head { flex-direction: column; align-items: flex-start; gap: 4px; }
@@ -247,34 +287,44 @@
 
   /* ── Spawn agent + web terminal ─────────────────────────────────────────── */
   .spawn-modal, .term-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+    position: fixed; inset: 0; background: var(--overlay); display: flex;
     align-items: center; justify-content: center; z-index: 1000; padding: 12px;
   }
   .spawn-modal .card, .term-overlay .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    width: 100%; max-width: 560px; max-height: 90vh; overflow: auto; padding: 16px;
+    width: 100%; max-width: 560px; max-height: 90vh; max-height: 90svh; overflow: auto; padding: 16px;
   }
-  .term-overlay .card { max-width: 900px; max-height: 92vh; display: flex; flex-direction: column; }
+  .term-overlay .card { max-width: 900px; max-height: 92vh; max-height: 92svh; display: flex; flex-direction: column; }
   .spawn-modal h3, .term-overlay h3 { margin: 0 0 12px; }
   .spawn-modal label { display: block; font-size: 12px; color: var(--dim); margin: 10px 0 4px; }
   .spawn-modal input, .spawn-modal select, .spawn-modal textarea {
     width: 100%; padding: 7px 9px; background: var(--bg); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; font: inherit;
   }
-  .spawn-modal .picker { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .spawn-modal .picker select { flex: 1 1 200px; }
+  .spawn-modal .picker { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+  /* Subdirectory browse list — a real scrollable <button> list (not a <select>
+     listbox) so it renders inline on iOS Safari, which collapses <select> to a
+     dropdown. Fixed height (not vh) keeps it a stable browse pane in the modal. */
+  .dir-list { flex: 2 1 240px; width: 100%; height: 224px; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+  .dir-item { display: block; width: 100%; text-align: left; background: transparent;
+    color: var(--text); border: none; border-radius: 6px; padding: 8px 10px; cursor: pointer;
+    font: inherit; font-size: 13px; min-height: 40px; }
+  .dir-item:hover { background: var(--hover); }
+  .dir-item:active { background: var(--panel2); }
+  .dir-empty { color: var(--muted); font-style: italic; padding: 10px; }
   .spawn-modal .crumbs { font-size: 11px; color: var(--dim); word-break: break-all; margin-top: 4px; }
   .spawn-modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   #xterm-host { flex: 1; min-height: 0; background: #000; border-radius: 6px; padding: 4px; }
   .term-overlay .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .spawn-btn { font-weight: 600; }
-  .badge.spawn { background: #11281f; color: var(--success); border: 1px solid #1f4d33; }
+  .badge.spawn { background: var(--idle-bg); color: var(--success); border: 1px solid var(--idle-border); }
 
   /* ── Task detail modal ─────────────────────────────────────────────────── */
-  .task-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
+  .task-modal { position: fixed; inset: 0; background: var(--overlay); display: flex;
     align-items: center; justify-content: center; z-index: 1000; padding: 12px; }
   .task-modal .card { background: var(--panel); border: 1px solid var(--border);
-    border-radius: 10px; width: 100%; max-width: 720px; max-height: 90vh; overflow: auto; padding: 16px; }
+    border-radius: 10px; width: 100%; max-width: 720px; max-height: 90vh; max-height: 90svh; overflow: auto; padding: 16px; }
   .task-modal .tm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
   .task-modal .tm-head h3 { margin: 0; font-size: 15px; color: var(--text); word-break: break-word; }
   .task-modal .tm-key { color: var(--accent2); font-size: 13px; margin-right: 6px; }
@@ -283,7 +333,7 @@
   .task-modal .tm-close:hover { color: var(--text); }
   .task-modal .tm-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
   .task-modal .tm-desc { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px; color: #c9d1d9; background: var(--panel2); border: 1px solid var(--border);
+    font-size: 12px; color: var(--body-text); background: var(--panel2); border: 1px solid var(--border);
     border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow: auto; }
   .task-modal .tm-section { margin-top: 14px; }
   .task-modal .gtitle { font-size: 12px; color: var(--dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }

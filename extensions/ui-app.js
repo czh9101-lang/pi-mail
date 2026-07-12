@@ -326,8 +326,10 @@ function setTab(name) {
 }
 
 document.querySelectorAll("nav button").forEach(b => {
-  b.addEventListener("click", () => setTab(b.dataset.tab));
+  b.addEventListener("click", () => { if (b.dataset.tab) setTab(b.dataset.tab); });
 });
+// Theme toggle button — cycles dark/light/system and persists via localStorage.
+document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
 
 window.addEventListener("hashchange", () => { if (applyRouteFromHash()) render(); });
 

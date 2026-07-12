@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>pi-mail — Federation Console</title>
 <link rel="stylesheet" href="/ui.css" />
+<!-- Apply persisted theme before first paint to avoid a flash of the wrong theme.
+     Handles dark (default, no attribute), light, and system (follows OS). -->
+<script>
+  (function(){
+    try {
+      var t = localStorage.getItem("pi-mail-theme");
+      var light = t === "light" ||
+        (t === "system" && matchMedia("(prefers-color-scheme: light)").matches);
+      if (light) document.documentElement.setAttribute("data-theme", "light");
+    } catch(e){}
+  })();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 </head>
@@ -21,6 +33,7 @@
     <button data-tab="mailbox">Mailbox</button>
     <button data-tab="history">History</button>
     <button data-tab="settings">Settings</button>
+    <button id="theme-toggle" class="theme-toggle" title="Switch theme (dark/light/system)" aria-label="Toggle theme">🌙</button>
   </nav>
 </header>
 <main id="main"></main>

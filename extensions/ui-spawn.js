@@ -76,15 +76,25 @@ function renderSpawnModal() {
     }
   });
   picker.appendChild(upBtn);
-  // Subdirectory select (navigate into).
-  const dirSel = el("select"); dirSel.size = 8; dirSel.style.flex = "2 1 240px";
-  if (spawnUi.loadingLs) { const o = el("option", null, "loading…"); dirSel.appendChild(o); }
-  else if (!spawnUi.dirs.length) { const o = el("option", null, "(no subdirectories)"); dirSel.appendChild(o); }
-  else { for (const d of spawnUi.dirs) { const o = el("option", null, "📁 " + d.name); o.value = d.path; dirSel.appendChild(o); } }
-  dirSel.addEventListener("change", () => {
-    if (dirSel.value) spawnLs(dirSel.value);
-  });
-  picker.appendChild(dirSel);
+  // Subdirectory list (navigate into). NOTE: this is a real <button> list, not
+  // a <select size> listbox. iOS Safari ignores the size attribute and collapses
+  // any <select> to a single-line dropdown + native wheel sheet — the inline
+  // browsable list the picker relies on simply does not exist on iOS. A button
+  // list renders and navigates identically on touch and desktop, so the file
+  // browser actually browses on iOS. (Same class of quirk we already worked
+  // around for <datalist>, which renders nothing on iOS Safari.)
+  const dirList = el("div", "dir-list");
+  if (spawnUi.loadingLs) dirList.appendChild(el("div", "dir-empty", "loading…"));
+  else if (!spawnUi.dirs.length) dirList.appendChild(el("div", "dir-empty", "(no subdirectories)"));
+  else {
+    for (const d of spawnUi.dirs) {
+      const b = el("button", "dir-item", "📁 " + d.name);
+      b.title = d.path;
+      b.addEventListener("click", () => spawnLs(d.path));
+      dirList.appendChild(b);
+    }
+  }
+  picker.appendChild(dirList);
   card.appendChild(picker);
   // Crumbs + favorite-this-dir toggle + manual path input
   const crumbs = el("div", "crumbs"); crumbs.textContent = spawnUi.path || "(pick a directory)";
