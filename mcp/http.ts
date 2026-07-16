@@ -11,7 +11,7 @@
  * http://127.0.0.1:${PI_MAIL_UI_PORT || 1994}.
  */
 
-import type { BoardState, BoardOpResponse, BoardBackend, BoardListOpts, CreateTaskBody, UpdateTaskBody, ChatPostBody, ChatGetBody, ChatResult } from "./types.js";
+import type { BoardState, BoardOpResponse, BoardBackend, BoardListOpts, CreateTaskBody, UpdateTaskBody, ChatPostBody, ChatGetBody, ChatResult, SyncResult } from "./types.js";
 
 /** Resolve the daemon base URL from env (with sensible defaults). */
 export function daemonBaseUrl(): string {
@@ -55,9 +55,9 @@ export async function setBoardConfig(config: Record<string, unknown>): Promise<u
   return request<unknown>("POST", "/api/board/config", config);
 }
 
-/** POST /api/board/sync — trigger a manual Jira sync. */
-export async function syncBoard(): Promise<unknown> {
-  return request<unknown>("POST", "/api/board/sync");
+/** POST /api/board/sync — trigger a manual Jira sync (fetch from Jira: issue state + column mapping). */
+export async function syncBoard(): Promise<SyncResult> {
+  return request<SyncResult>("POST", "/api/board/sync");
 }
 
 /** POST /api/board/move — move a task to a column. */

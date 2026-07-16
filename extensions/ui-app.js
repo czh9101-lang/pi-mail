@@ -13,14 +13,19 @@ function renderBoard() {
       ? (board.syncError ? "⚠ Jira sync error: " + board.syncError : "Jira sync · last " + (board.lastSync ? fmtTime(board.lastSync) : "never"))
       : "Jira not configured — board-only mode (open Settings)";
   bar.appendChild(sync);
-  const syncBtn = el("button", "btn secondary mini", "Sync now");
+  const syncBtn = el("button", "btn secondary mini", "Fetch from Jira");
   syncBtn.disabled = board.jiraEnabled === false;
-  syncBtn.title = board.jiraEnabled === false ? "Jira is disabled — enable it in Settings to sync" : "Sync with Jira now";
+  syncBtn.title = board.jiraEnabled === false ? "Jira is disabled — enable it in Settings to fetch" : "Fetch issue state + column mapping from Jira now";
   syncBtn.addEventListener("click", async () => {
     syncBtn.disabled = true;
     const r = await post("/api/board/sync", {});
     syncBtn.disabled = false;
-    if (r.ok) { toast("🔄 Synced with Jira"); refresh(); } else toast("❌ " + (r.error || "sync failed"), true);
+    if (r.ok) {
+      const col = r.columns;
+      const changed = col && col.ok && (col.added?.length || col.promoted?.length);
+      toast("🔄 Fetched from Jira (issues + columns)" + (changed ? ` — columns: ${[...(col.added || []).map(s => "+" + s), ...(col.promoted || []).map(s => "~" + s)].join(", ")}` : ""));
+      refresh();
+    } else toast("❌ " + (r.error || "fetch failed"), true);
   });
   bar.appendChild(syncBtn);
   const cbWrap = el("span", "checkbox");

@@ -321,8 +321,8 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
         json(res, 200, { ok: false, error: reason });
         return;
       }
-      await syncBoard("manual");
-      json(res, 200, { ok: !board.syncError, error: board.syncError ?? undefined });
+      const r = await syncBoard("manual");
+      json(res, 200, { ok: !board.syncError, error: board.syncError ?? undefined, columns: r?.columns ?? null });
       return;
     }
 

@@ -326,12 +326,27 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
   // ── sync_board ────────────────────────────────────────────────────────────
   server.tool(
     "sync_board",
-    "Trigger a manual Jira sync (pull remote changes, push local moves). Only when Jira is enabled and configured.",
+    "Trigger a manual fetch from Jira: pull remote issue state AND refresh the board's column↔status mapping from the remote project's columns (non-destructive — adds missing Jira statuses, promotes same-named board-only columns, never removes your columns/instructions). Only when Jira is enabled and configured; a no-op otherwise.",
     {},
     async () => {
       try {
-        const resp = await http.syncBoard();
-        return ok(`✅ Board sync triggered\n${JSON.stringify(resp, null, 2)}`);
+        const r = await http.syncBoard();
+        const lines = [];
+        if (r.ok === false) {
+          lines.push(`❌ ${r.error || "fetch failed"}`);
+        } else {
+          lines.push("✅ Fetched from Jira (issues + columns)");
+          if (r.columns?.ok) {
+            const parts = [];
+            if (r.columns.added?.length) parts.push(`added ${r.columns.added.join(", ")}`);
+            if (r.columns.promoted?.length) parts.push(`promoted ${r.columns.promoted.join(", ")}`);
+            lines.push(`Columns (${r.columns.source}): ${parts.length ? parts.join("; ") : "no changes — mapping already up to date"}`);
+          } else if (r.columns && r.columns.ok === false) {
+            lines.push(`Columns: not refreshed (${r.columns.reason ?? "unavailable"})`);
+          }
+        }
+        lines.push(JSON.stringify(r, null, 2));
+        return ok(lines.join("\n"));
       } catch (e) {
         return toolError(e);
       }

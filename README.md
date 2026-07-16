@@ -125,7 +125,7 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/board/update` | `{ taskId, summary?, description? }` | Edit summary/description (pushed to Jira for Jira tasks) |
 | `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
 | `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout. `config.jiraEnabled` toggles Jira off entirely (board-only mode) |
-| `POST /api/board/sync` | — | Force a Jira sync now |
+| `POST /api/board/sync` | — | Fetch from Jira now — pull remote issue state AND refresh the board's column↔status mapping. Returns `{ ok, error?, columns: { added, promoted, source } | null }` |
 | `GET /api/mm` | — | Middle-manager state: config + active MM sessions |
 | `GET /api/ceo` | — | CEO state: config + active CEO sessions |
 | `GET /api/spawn` | — | Spawned sessions: name, cwd, model, alive, agentId |
@@ -145,7 +145,12 @@ The daemon hosts a shared kanban board for the whole federation, with optional
   `parent in (…)` even when the subtasks don't match the JQL) and **Jira
   comments** (merged into the task's activity log, deduped). Remote status
   changes move the cards; issues that leave the sprint disappear from the
-  board (except board-created ones, which are pinned).
+  board (except board-created ones, which are pinned). On an explicit
+  **fetch from Jira** (the UI's *Fetch from Jira* button, `POST
+  /api/board/sync`, or the `sync_board` MCP tool) the pull *also* refreshes
+  the board's **column↔status mapping** from the remote project's columns —
+  see [Fetching columns from Jira](#fetching-columns-from-jira). The 60 s
+  interval pulls issues only (columns change rarely).
 - **Push**: moving a task into a column that maps to a Jira status performs the
   matching Jira transition. Board comments on Jira tasks are posted to the
   issue. Summary/description edits are pushed to the issue. Agents can
@@ -191,6 +196,30 @@ status** (`To Do`, `In Progress`, `Done`, …) or is **board-only** with custom
 board-only column keeps its Jira status untouched; the instructions are mailed
 to the assignee whenever a task is assigned or moved there, which is what makes
 "drag it to Refine" an actionable request for an agent.
+
+### Fetching columns from Jira
+
+An on-demand **fetch from Jira** (the board's *Fetch from Jira* button,
+`POST /api/board/sync`, or the `sync_board` MCP tool) pulls the remote
+project's board columns and reconciles the board's **column↔status mapping**
+so it reflects what Jira has — without clobbering your local layout. The merge
+is **non-destructive**:
+
+- A remote status that no local column maps to → a new Jira-mapped column is
+  **added** (inserted after the last existing Jira-mapped column so mapped
+  columns stay clustered). Reorder/edit it in Board → Settings.
+- A remote status whose name matches an existing **board-only** column → that
+  column is **promoted** to Jira-mapped (its id/name/instructions are kept;
+  only its `jiraStatus` is set).
+- A status already mapped (case-insensitive) → no-op.
+- Your columns, board-only columns, and instructions are **never removed**.
+
+It prefers the agile board configuration (the statuses actually on the
+project's board columns) and falls back to the project's full status list when
+the agile API is unavailable or no board is configured. The 60 s automatic
+sync pulls **issues only** (columns change rarely); the explicit fetch pulls
+issues **and** columns. The fetch makes **no Jira network calls** when Jira
+is disabled or unconfigured (board-only mode).
 
 ### Assignment = mail
 
@@ -408,7 +437,7 @@ way an agent does. Board operations run as the `human` agent
 | `board_update_task({ taskId, summary?, description? })` | edit summary/description (pushed to Jira) |
 | `board_flag_task({ taskId, reason?, clear? })` | mark/clear "unclear" (notifies the operator) |
 | `get_board_config` / `set_board_config({ config })` | read/write board + Jira config |
-| `sync_board` | trigger a manual Jira sync |
+| `sync_board` | fetch from Jira now — pull remote issue state AND refresh the board's column↔status mapping (non-destructive) |
 
 #### Project chat tools
 

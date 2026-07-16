@@ -96,8 +96,8 @@ const inProcessBoardBackend = {
       const reason = board.config.jiraEnabled === false ? "Jira is disabled" : "Jira is not configured";
       return { ok: false, error: reason };
     }
-    await syncBoard("manual");
-    return { ok: !board.syncError, error: board.syncError ?? undefined };
+    const r = await syncBoard("manual");
+    return { ok: !board.syncError, error: board.syncError ?? undefined, columns: r?.columns ?? null };
   },
   async moveTask(taskId, column, note) {
     const r = await boardMove(HUMAN_AGENT_ID, taskId, column, note);

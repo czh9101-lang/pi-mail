@@ -156,6 +156,114 @@ export function importJiraComments(task, commentField) {
   if (task.knownCommentIds.length > 200) task.knownCommentIds.splice(0, task.knownCommentIds.length - 200);
 }
 
+// ── Column mapping pull (fetch columns from Jira) ────────────────────────────
+
+/**
+ * Merge a set of remote Jira status names into the board's column list so the
+ * local column↔jiraStatus mapping reflects the remote project's columns.
+ * NON-DESTRUCTIVE — it only
+ *   - promotes a same-named board-only column to Jira-mapped (sets its
+ *     jiraStatus), and
+ *   - adds a new Jira-mapped column for any remote status with no local
+ *     counterpart (inserted after the last existing Jira-mapped column so
+ *     mapped columns cluster together, ahead of any trailing board-only
+ *     columns),
+ * never removing user columns, board-only columns, or instructions. New
+ * columns can be reordered/edited in Board → Settings. Pure: mutates the
+ * passed `columns` array in place and returns what changed (for logging /
+ * tests). Case-insensitive on status names.
+ * @param {Array<{ id: string, name: string, jiraStatus: string | null, instructions: string }>} columns
+ * @param {string[]} remoteStatuses
+ * @returns {{ added: string[], promoted: string[] }}
+ */
+export function mergeJiraColumns(columns, remoteStatuses) {
+  const added = [];
+  const promoted = [];
+  const lc = (s) => String(s ?? "").toLowerCase();
+  for (const status of remoteStatuses) {
+    if (!status) continue;
+    // Already mapped (case-insensitive) → nothing to do.
+    if (columns.some((c) => c.jiraStatus && lc(c.jiraStatus) === lc(status))) continue;
+    // Promote a same-named board-only column to Jira-mapped (keeps its
+    // id/name/instructions; just links it to the Jira status).
+    const byName = columns.find((c) => !c.jiraStatus && lc(c.name) === lc(status));
+    if (byName) {
+      byName.jiraStatus = status;
+      promoted.push(status);
+      continue;
+    }
+    // New Jira-mapped column. Insert after the last Jira-mapped column so
+    // mapped columns stay clustered (ahead of any trailing board-only
+    // columns); append if there is no mapped column yet.
+    const id =
+      lc(status).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") ||
+      `col-${columns.length}`;
+    const col = { id, name: status, jiraStatus: status, instructions: "" };
+    let insertAfter = -1;
+    for (let i = columns.length - 1; i >= 0; i--) {
+      if (columns[i].jiraStatus) { insertAfter = i; break; }
+    }
+    columns.splice(insertAfter + 1, 0, col);
+    added.push(status);
+  }
+  return { added, promoted };
+}
+
+/**
+ * Pull the remote Jira project's board columns / statuses and merge them into
+ * `board.columns` (non-destructive — see mergeJiraColumns). This is the
+ * "fetch columns from Jira" half of a fetch-from-Jira pass; syncBoard calls it
+ * on explicit fetches (manual / startup / config change), not on the 60s
+ * interval. No-op (no network) when Jira is disabled or unconfigured, or when
+ * no project key is set — so the feature makes no Jira calls in board-only
+ * mode (task 6e6e2ab2).
+ * @returns {Promise<{ ok: boolean, reason?: string, source?: string, added: string[], promoted: string[] }>}
+ */
+export async function fetchJiraColumns() {
+  const cfg = jiraCfg();
+  if (!cfg) return { ok: false, reason: "not-configured", added: [], promoted: [] };
+  const projectKey = cfg.projectKey;
+  if (!projectKey) return { ok: false, reason: "no-project-key", added: [], promoted: [] };
+  let remoteStatuses = [];
+  let source = "none";
+  // Primary: the agile board configuration — the statuses actually laid out
+  // on the project's board columns (excludes statuses not on the board).
+  try {
+    const qs = new URLSearchParams({ projectKeyOrId: projectKey, maxResults: "100" });
+    const boards = await jiraFetch(`/rest/agile/1.0/board?${qs}`);
+    const boardId = boards?.values?.[0]?.id;
+    if (boardId != null) {
+      const conf = await jiraFetch(`/rest/agile/1.0/board/${boardId}/configuration`);
+      const cols = conf?.columnConfig?.columns ?? [];
+      const names = new Set();
+      for (const col of cols) for (const s of (col.statuses ?? [])) if (s?.name) names.add(s.name);
+      if (names.size) { remoteStatuses = [...names]; source = `agile board ${boardId}`; }
+    }
+  } catch (e) {
+    log(`fetchJiraColumns: agile board config unavailable: ${e.message}`);
+  }
+  // Fallback: the project's statuses (every status available to the project's
+  // issue types). Used when the agile API is absent or the project has no
+  // board configured.
+  if (!remoteStatuses.length) {
+    try {
+      const arr = await jiraFetch(`/rest/api/3/project/${projectKey}/statuses`);
+      const names = new Set();
+      for (const it of (Array.isArray(arr) ? arr : [])) for (const s of (it.statuses ?? [])) if (s?.name) names.add(s.name);
+      if (names.size) { remoteStatuses = [...names]; source = `project ${projectKey}`; }
+    } catch (e) {
+      log(`fetchJiraColumns: project statuses unavailable: ${e.message}`);
+    }
+  }
+  if (!remoteStatuses.length) return { ok: false, reason: "no-statuses", source, added: [], promoted: [] };
+  const { added, promoted } = mergeJiraColumns(board.columns, remoteStatuses);
+  if (added.length || promoted.length) {
+    log(`fetchJiraColumns: ${source} → added [${added.join(", ")}], promoted [${promoted.join(", ")}]`);
+    schedulePersistBoard();
+  }
+  return { ok: true, source, added, promoted };
+}
+
 // ── Jira sync loop (pull) ────────────────────────────────────────────────────
 
 export let boardSyncing = false;
@@ -163,7 +271,19 @@ export async function syncBoard(reason = "interval") {
   const cfg = jiraCfg();
   if (!cfg || boardSyncing) return;
   boardSyncing = true;
+  let columnResult = null;
   try {
+    // "Fetch from Jira" column refresh: on an explicit fetch (manual /
+    // startup / config change) also pull the remote project's board columns
+    // and merge the status mapping into board.columns (non-destructive — see
+    // mergeJiraColumns). Skipped on the 60s interval so the periodic loop
+    // stays lean; column layout changes rarely and the operator can always
+    // hit "Fetch from Jira". No-op when Jira is off (fetchJiraColumns guards
+    // on jiraCfg()).
+    if (reason !== "interval") {
+      try { columnResult = await fetchJiraColumns(); }
+      catch (e) { log(`board sync: column fetch failed: ${e.message}`); }
+    }
     const issues = await jiraSearch(cfg.jql || DEFAULT_JQL);
     const have = new Set(issues.map((i) => i.key));
 
@@ -273,9 +393,11 @@ export async function syncBoard(reason = "interval") {
     board.lastSync = Date.now();
     board.syncError = null;
     schedulePersistBoard();
+    return { columns: columnResult };
   } catch (e) {
     board.syncError = e?.message ?? String(e);
     log(`board sync failed (${reason}): ${board.syncError}`);
+    return { columns: columnResult };
   } finally {
     boardSyncing = false;
   }

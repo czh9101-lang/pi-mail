@@ -175,6 +175,23 @@ export interface ChatResult {
   answered?: boolean;
 }
 
+/** Result from POST /api/board/sync (the on-demand "fetch from Jira").
+ *  `columns` reports the non-destructive column-mapping refresh: statuses
+ *  added as new mapped columns, and same-named board-only columns promoted. */
+export interface SyncResult {
+  ok: boolean;
+  error?: string;
+  /** The column-mapping refresh summary, or null when columns weren't refreshed
+   *  (e.g. the 60s issue-only interval, or Jira off). */
+  columns?: {
+    ok: boolean;
+    reason?: string;
+    source?: string;
+    added?: string[];
+    promoted?: string[];
+  } | null;
+}
+
 /**
  * The backend the MCP server talks to. The default implementation
  * (`http.ts` → `httpBackend`) is a thin HTTP client over the daemon's
@@ -188,7 +205,7 @@ export interface BoardBackend {
   getBoard(opts?: BoardListOpts): Promise<BoardState>;
   getBoardConfig(): Promise<unknown>;
   setBoardConfig(config: Record<string, unknown>): Promise<unknown>;
-  syncBoard(): Promise<unknown>;
+  syncBoard(): Promise<SyncResult>;
   moveTask(taskId: string, column: string, note?: string): Promise<BoardOpResponse>;
   commentTask(taskId: string, text: string): Promise<BoardOpResponse>;
   progressTask(taskId: string, text: string): Promise<BoardOpResponse>;
