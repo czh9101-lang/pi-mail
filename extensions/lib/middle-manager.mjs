@@ -82,16 +82,29 @@ function liveMMSessions() {
  * Predicate injected into board.mjs: true when `agentId` belongs to a currently
  * tracked middle-manager session. Gives the MM all-groups board visibility
  * (it oversees multiple projects, so the same-group partition must not hide
- * tasks from it). Matches by agentName (the tmux session name, known the
- * moment the agent registers) so it works immediately, before the agentId is
- * stamped on the registry entry.
+ * tasks from it).
+ *
+ * Two independent match paths, either sufficient (task 16a594db):
+ *  1. agentName — the tmux session name, known the moment the agent registers,
+ *     so all-groups visibility kicks in immediately, before the agentId is
+ *     stamped on the registry entry (the async registration wait may not have
+ *     completed yet when the MM fires its first board_list_tasks).
+ *  2. agentId — the id stamped on the registry entry once the agent has
+ *     registered. A robust fallback that still recognises the MM if its
+ *     registered agentName diverged from the session name (e.g. a custom name
+ *     restored from a prior session, or a mail_set_name). Without this, a
+ *     CEO-spawned MM (auto-named "<dir>-<id6>") that for any reason registered
+ *     under a different name would lose all-groups visibility and be unable to
+ *     administer cross-group tasks — the live 7/16 MM failure mode.
  */
 function isMiddleManager(agentId) {
   if (!agentId || agentId === HUMAN_AGENT_ID) return false;
-  const name = agents.get(agentId)?.info?.agentName;
-  if (!name) return false;
+  const info = agents.get(agentId)?.info;
+  const name = info?.agentName;
   for (const s of Object.values(spawnRegistry.sessions)) {
-    if (s.mm && (s.agentName === name)) return true;
+    if (!s.mm) continue;
+    if (name && s.agentName === name) return true;
+    if (s.agentId && s.agentId === agentId) return true;
   }
   return false;
 }

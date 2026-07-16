@@ -21,9 +21,14 @@ import type { BoardBackend, BoardOpResponse, ChatMessage } from "./types.js";
 import { httpBackend } from "./http.js";
 import { findTask, renderBoard, renderOpResult, renderTask } from "./format.js";
 
-/** Common: find a task across the board, returning a "not found" string if missing. */
+/** Common: find a task across the board, returning a "not found" string if missing.
+ *  Fetches with group:'all' (task 16a594db) so a task is resolved by id across
+ *  EVERY project group regardless of the caller's default same-group scoping —
+ *  get-by-id must not be gated by the caller's own group (board_list_tasks can
+ *  already list cross-group with group:'all', and get-by-id should be at least
+ *  as permissive). */
 async function loadTask(backend: BoardBackend, taskId: string) {
-  const b = await backend.getBoard();
+  const b = await backend.getBoard({ group: "all" });
   const t = findTask(b, taskId);
   return { b, t };
 }

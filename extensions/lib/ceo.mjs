@@ -93,16 +93,25 @@ function liveCeoSessions() {
  * tracked CEO session OR a middle-manager session (both are managers that
  * oversee multiple projects, so the same-group partition must not hide tasks
  * from them). Composed with the MM's own predicate so a single injected fn
- * covers both tiers. Matches by agentName (the tmux session name, known the
- * moment the agent registers) so it works immediately, before the agentId is
- * stamped on the registry entry.
+ * covers both tiers.
+ *
+ * Two independent match paths for the CEO half (task 16a594db), mirroring
+ * isMiddleManager:
+ *  1. agentName — the tmux session name, known the moment the agent registers
+ *     (works immediately, before the agentId is stamped).
+ *  2. agentId — stamped on the registry entry after registration; a robust
+ *     fallback that still recognises the CEO if its registered agentName
+ *     diverged from the session name.
+ * Either path is sufficient. The MM half delegates to isMiddleManager.
  */
 function isCeo(agentId) {
   if (!agentId || agentId === HUMAN_AGENT_ID) return false;
-  const name = agents.get(agentId)?.info?.agentName;
-  if (!name) return false;
+  const info = agents.get(agentId)?.info;
+  const name = info?.agentName;
   for (const s of Object.values(spawnRegistry.sessions)) {
-    if (s.ceo && s.agentName === name) return true;
+    if (!s.ceo) continue;
+    if (name && s.agentName === name) return true;
+    if (s.agentId && s.agentId === agentId) return true;
   }
   return false;
 }

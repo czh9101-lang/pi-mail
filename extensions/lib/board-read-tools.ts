@@ -102,7 +102,14 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       try {
-        const b = await fetchBoard(ctx);
+        // Fetch with group:'all' (task 16a594db) so a task is resolved by id
+        // across EVERY project group regardless of the caller's default
+        // same-group scoping. get-by-id must not be gated by the caller's own
+        // group — board_list_tasks can already list cross-group with
+        // group:'all', and get-by-id should be at least as permissive. (This
+        // also makes board_get_task find archived tasks, which the default
+        // includeArchived:false scoping would hide.)
+        const b = await fetchBoard(ctx, { group: "all", includeArchived: true });
         const s = params.taskId.toLowerCase();
         const t = (b.tasks ?? []).find(
           (x) => x.id === params.taskId || x.id.startsWith(params.taskId) || (x.key && x.key.toLowerCase() === s)

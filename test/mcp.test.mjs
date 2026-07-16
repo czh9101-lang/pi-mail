@@ -13,6 +13,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn as pSpawn } from "node:child_process";
 import * as net from "node:net";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -128,6 +129,43 @@ after(async () => {
   await stopDaemon();
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
+
+// ── socket client helper (to register workers that stamp task groups) ────────
+
+function mkSocketClient() {
+  return new Promise((resolve, reject) => {
+    const s = net.createConnection(sockPath);
+    s.setEncoding("utf8");
+    let buf = "";
+    let nextId = 1;
+    const pending = new Map();
+    s.on("data", (chunk) => {
+      buf += chunk;
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let m; try { m = JSON.parse(line); } catch { continue; }
+        if (m.type === "ping") { s.write(JSON.stringify({ type: "pong" }) + "\n"); continue; }
+        if (m._reqId != null && pending.has(m._reqId)) {
+          const e = pending.get(m._reqId); clearTimeout(e.t); pending.delete(m._reqId); e.res(m);
+        }
+      }
+    });
+    s.once("connect", () => resolve({
+      request(msg, timeoutMs = 5000) {
+        const id = nextId++;
+        return new Promise((res, rej) => {
+          const t = setTimeout(() => { pending.delete(id); rej(new Error("timeout: " + msg.type)); }, timeoutMs);
+          pending.set(id, { res, rej, t });
+          s.write(JSON.stringify({ ...msg, _reqId: id }) + "\n");
+        });
+      },
+      close() { s.destroy(); },
+    }));
+    s.once("error", reject);
+  });
+}
 
 // ── initialize / tools/list ─────────────────────────────────────────────────
 
@@ -313,4 +351,38 @@ test("get_board_config returns column list", async () => {
   const cfg = JSON.parse(r.body.result.content[0].text);
   assert.ok(Array.isArray(cfg.columns) && cfg.columns.length > 0);
   assert.equal(cfg.config.apiTokenSet, false);
+});
+
+// ── board_get_task cross-group resolution (task 16a594db, Part B) ────────────
+//
+// loadTask() now fetches with group:"all" so a task is resolved by id across
+// every project group regardless of the caller's default same-group scoping.
+// The in-daemon MCP server runs as the human operator (who already sees all
+// groups), so this test pins the cross-group get-by-id path end-to-end
+// through the MCP server: a task stamped to a worker's project group is
+// found by board_get_task via its id.
+
+test("board_get_task resolves a cross-group task by id (loadTask group:'all', 16a594db)", async () => {
+  // Register a socket worker in a project dir so board_create stamps that
+  // group onto the task (a human/MCP-created task would have group null).
+  const dir = fs.mkdtempSync(path.join(tmpHome, "mcp-xgrp-"));
+  const worker = await mkSocketClient();
+  await worker.request({ type: "register", agentId: crypto.randomUUID(), agentName: "mcp-xgrp-worker", cwd: dir });
+  const cr = await worker.request({ type: "board_create", summary: "mcp cross-group probe", description: "stamped to the worker's group" });
+  assert.notEqual(cr.type, "error", `board_create: ${JSON.stringify(cr)}`);
+  const taskId = cr.task.id;
+  assert.equal(cr.task.group, path.basename(dir), "task stamped with the worker's project group");
+
+  // MCP board_get_task must find the group-stamped task by id (loadTask uses
+  // group:"all" so the worker's own-group scoping is not applied to get-by-id).
+  const r = await call("tools/call", { name: "board_get_task", arguments: { taskId } });
+  assert.equal(r.status, 200);
+  assert.ok(!r.body.result.isError, "tool returned an error: " + (r.body.result.content?.[0]?.text ?? ""));
+  const text = r.body.result.content[0].text;
+  assert.match(text, /mcp cross-group probe/);
+  assert.match(text, /stamped to the worker's group/);
+
+  // Cleanup: archive the task so it doesn't pollute the shared board.
+  await worker.request({ type: "board_move", taskId, column: "archive" });
+  worker.close();
 });
