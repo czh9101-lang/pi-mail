@@ -44,6 +44,66 @@ function agentPickList() {
 
 function isSubtask(t) { return !!(t.parentId || t.parentKey); }
 
+// ── Drag edge auto-scroll ───────────────────────────────────────────────────
+// When a task card is dragged toward an edge of the scrollable board (the
+// horizontal .board row — off-screen columns are left/right) or the vertical
+// `main` pane (off-screen content above/below), the relevant container
+// auto-scrolls so off-screen columns/content become reachable drop targets.
+// A rAF loop reads the last drag pointer coords (updated on dragover) and
+// ramps the scroll speed with proximity to the edge; the loop stops on drop.
+// Boundaries are 40px (zone where scrolling starts) with a max step of ~22px.
+const DRAG_SCROLL_EDGE = 40;
+const DRAG_SCROLL_MAX = 22;
+function scrollStepFor(cont, rect, pos, horiz) {
+  if (!cont) return 0;
+  const start = horiz ? rect.left : rect.top;
+  const end = horiz ? rect.right : rect.bottom;
+  if (pos < start + DRAG_SCROLL_EDGE) {
+    // Near the start edge — scroll backward, ramp with proximity.
+    const dist = Math.max(0, pos - start);
+    return -Math.round((1 - dist / DRAG_SCROLL_EDGE) * DRAG_SCROLL_MAX);
+  }
+  if (pos > end - DRAG_SCROLL_EDGE) {
+    const dist = Math.max(0, end - pos);
+    return Math.round((1 - dist / DRAG_SCROLL_EDGE) * DRAG_SCROLL_MAX);
+  }
+  return 0;
+}
+function startDragScroll() {
+  if (boardUi.dragScroll && boardUi.dragScroll.raf) return;
+  boardUi.dragScroll = { raf: null, x: 0, y: 0 };
+  const tick = () => {
+    const ds = boardUi.dragScroll;
+    if (!ds) return;
+    const x = ds.x, y = ds.y;
+    const board = $(".board");
+    if (board) {
+      const r = board.getBoundingClientRect();
+      const dx = scrollStepFor(board, r, x, true);
+      if (dx) board.scrollLeft += dx;
+    }
+    if (main) {
+      const r = main.getBoundingClientRect();
+      const dy = scrollStepFor(main, r, y, false);
+      if (dy) main.scrollTop += dy;
+    }
+    ds.raf = requestAnimationFrame(tick);
+  };
+  boardUi.dragScroll.raf = requestAnimationFrame(tick);
+}
+function stopDragScroll() {
+  const ds = boardUi.dragScroll;
+  if (ds && ds.raf) cancelAnimationFrame(ds.raf);
+  boardUi.dragScroll = null;
+}
+// Track the pointer during a drag so the rAF loop knows where it is. dragover
+// fires on the column under the pointer, so we attach a document-level
+// listener once per drag (added in dragstart, removed in dragend) to catch
+// it regardless of which column is hovered.
+function dragScrollOver(e) {
+  if (boardUi.dragScroll) { boardUi.dragScroll.x = e.clientX; boardUi.dragScroll.y = e.clientY; }
+}
+
 /** Attach HTML5 drag-and-drop handlers to a column element so task cards can
  *  be dropped onto it. Reuses the existing /api/board/move endpoint with the
  *  given column spec (a column id, or "backlog"/"archive"). A depth counter
@@ -92,11 +152,19 @@ function taskCard(t, board) {
     card.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", t.id); } catch {}
+    // Start edge auto-scroll + track the pointer so off-screen columns are
+    // reachable. Seed the pointer at the card so the first frames don't
+    // scroll before the user moves the mouse (dragover updates it live).
+    boardUi.dragScroll = { raf: null, x: e.clientX, y: e.clientY };
+    document.addEventListener("dragover", dragScrollOver);
+    startDragScroll();
   });
   card.addEventListener("dragend", () => {
     boardUi.dragTaskId = null;
     card.classList.remove("dragging");
     document.querySelectorAll(".bcol.drag-over").forEach(c => c.classList.remove("drag-over"));
+    document.removeEventListener("dragover", dragScrollOver);
+    stopDragScroll();
   });
   const sum = el("div", "tsum");
   if (t.key) {

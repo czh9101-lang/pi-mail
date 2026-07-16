@@ -16,6 +16,7 @@ let boardUi = {
   archiveTasks: null,           // cached archive tasks (null = not loaded); fetched on demand from /api/board?location=archive since /api/state no longer ships them
   groupFilter: "__all",         // "__all" = every group, else a project group
   dragTaskId: null,            // task id being dragged (DnD); suppresses poll re-render
+  dragScroll: null,            // active drag edge-auto-scroll {raf, x, y} (rAF handle + last client coords)
 };
 // Mailbox UI state (Outlook-style conversation view) — survives re-renders.
 let mailboxUi = {

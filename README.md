@@ -137,7 +137,12 @@ The SPA talks to a tiny JSON API you can also call directly:
 ## Task board
 
 The daemon hosts a shared kanban board for the whole federation, with optional
-**two-way Jira sync** for your current sprint:
+**two-way Jira sync** for your current sprint. In the web UI you can **drag a
+task card between columns**; dragging toward an edge of the board auto-scrolls
+the board (and the page) so columns that are off-screen stay reachable drop
+targets, and each card's move dropdown lists columns + the off-board pools.
+Beyond the kanban columns there are two off-board pools — **Backlog** and
+**Archive** — both local-only (never pushed to Jira).
 
 - **Pull**: every 60 s the daemon runs the configured JQL (default
   `assignee = currentUser() AND sprint in openSprints()`) and mirrors those
