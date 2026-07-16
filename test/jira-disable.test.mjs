@@ -203,3 +203,25 @@ test("board-only view contains zero Jira references in serialized output", () =>
   assert.doesNotMatch(blob, /"jiraStatus":"[^"]+"/);
   assert.doesNotMatch(blob, /"key":"[A-Z]+-\d+"/);
 });
+
+test("board-only: config source keeps jiraStatus while the view scrubs it (settings bug e896f531)", () => {
+  // Regression (human report 7/16, Settings → columns → Jira status empty):
+  // the Settings columns editor must show + edit the *stored* column↔jiraStatus
+  // mapping even in board-only mode, so re-enabling Jira restores it. The view
+  // scrub (boardState) hides jiraStatus from /api/board; the config endpoint
+  // (GET /api/board/config returns `board.columns` directly, unscrubbed) must
+  // keep it. This test pins the two-source contract the UI relies on:
+  //   - boardState().columns  → jiraStatus scrubbed to null (board view)
+  //   - board.columns         → jiraStatus intact (config/settings source)
+  withCreds();
+  board.config.jiraEnabled = false;
+  const view = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const inProgressView = view.columns.find((c) => c.id === "inprogress");
+  const inProgressCfg = board.columns.find((c) => c.id === "inprogress");
+  assert.equal(inProgressView.jiraStatus, null, "view scrubbed — board_list_tasks hides (jira: …)");
+  assert.equal(inProgressCfg.jiraStatus, "In Progress", "config source intact — Settings can show/edit/persist the mapping");
+  // Re-enabling restores the mapping in the view.
+  board.config.jiraEnabled = true;
+  const viewOn = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  assert.equal(viewOn.columns.find((c) => c.id === "inprogress").jiraStatus, "In Progress", "view restored after re-enabling");
+});

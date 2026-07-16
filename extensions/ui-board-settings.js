@@ -81,7 +81,16 @@ function boardSettingsCard(board) {
   // Columns editor — draft lives in boardUi so poll re-renders don't wipe edits
   card.appendChild(el("label", null, "Columns — order matters; blank Jira status = board-only column with instructions"));
   const colWrap = el("div");
-  if (!boardUi.colsDraft) boardUi.colsDraft = board.columns.map(c => ({ ...c }));
+  // Source the columns editor from the *config* endpoint's columns, not the
+  // board-state view. In board-only mode (Jira disabled OR unconfigured)
+  // boardState scrubs each column's jiraStatus → null in its VIEW (task
+  // 6e6e2ab2), so the /api/board view would render the Jira status input empty
+  // even though the stored mapping is intact. The /api/board/config endpoint
+  // returns the stored (unscrubbed) board.columns, so the Settings form edits
+  // and persists the real stored mapping — re-enabling Jira restores it in the
+  // board view. (boardUi.colsDraft is the editable draft, cached in boardUi so
+  // poll re-renders don't wipe in-progress edits.)
+  if (!boardUi.colsDraft) boardUi.colsDraft = (board._cfgColumns ?? board.columns).map(c => ({ ...c }));
   const rows = boardUi.colsDraft;
   const renderCols = () => {
     colWrap.innerHTML = "";

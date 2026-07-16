@@ -240,7 +240,7 @@ async function renderSettings() {
   await ensureBoardCfg();
   const board = state.board;
   if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
-  main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config }));
+  main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config, _cfgColumns: boardCfgCache.cfg?.columns }));
 }
 
 function renderHistory() {
