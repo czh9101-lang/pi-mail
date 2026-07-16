@@ -162,17 +162,44 @@ test("stored state is NOT mutated by the scrub (re-enabling restores keys)", () 
   assert.equal(st.jiraConfigured, true);
 });
 
-test("jiraEnabled:true with no credentials behaves as before (not configured)", () => {
+test("jiraEnabled:true with no credentials scrubs the view (board-only mode)", () => {
+  // Regression (human report 7/16): the board was "not configured" (no creds)
+  // yet Jira ticket refs still surfaced because the scrub only fired on
+  // jiraEnabled:false. Board-only mode = Jira effectively off for ANY reason
+  // (disabled flag OR no creds) → the view must contain zero Jira references.
   board.config.jiraEnabled = true;
   board.config.baseUrl = "";
   board.config.email = "";
   board.config.apiToken = "";
   assert.equal(jiraCfg(), null, "enabled but unconfigured → null (board-only)");
   const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
-  assert.equal(st.jiraEnabled, true);
+  assert.equal(st.jiraEnabled, true, "master switch still reflects user intent");
   assert.equal(st.jiraConfigured, false);
-  // No scrubbing happens when enabled (even if unconfigured): the Jira task
-  // keeps its key so an operator who later adds creds sees the right data.
+  // Board-only → view scrubbed even though the flag is on.
   const jiraView = st.tasks.find((t) => t.id === "t-jira-1");
-  assert.equal(jiraView.key, "PROJ-123", "enabled (unconfigured) keeps key in view");
+  assert.equal(jiraView.key, null, "key scrubbed when not configured");
+  assert.equal(jiraView.jiraStatus, null, "jiraStatus scrubbed when not configured");
+  assert.equal(jiraView.url, null, "url scrubbed when not configured");
+  assert.equal(jiraView.origin, "local", "origin relabelled when not configured");
+  const inProgress = st.columns.find((c) => c.id === "inprogress");
+  assert.equal(inProgress.jiraStatus, null, "column jiraStatus scrubbed → no (jira: …) annotation");
+  // Stored state intact → adding creds later restores keys in the view.
+  const stored = board.tasks.find((t) => t.id === "t-jira-1");
+  assert.equal(stored.key, "PROJ-123", "stored key intact while unconfigured");
+});
+
+test("board-only view contains zero Jira references in serialized output", () => {
+  // End-to-end check of the acceptance criterion: with Jira off, the VIEW
+  // (tasks + columns) must serialise to zero Jira ticket references — no key,
+  // jiraStatus, url, parentKey, origin:jira, or column jiraStatus anywhere.
+  withCreds();
+  board.config.jiraEnabled = false;
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const blob = JSON.stringify(st);
+  assert.match(blob, /"origin":"local"/);
+  assert.doesNotMatch(blob, /PROJ-123/);
+  assert.doesNotMatch(blob, /PROJ-100/);
+  assert.doesNotMatch(blob, /atlassian\.net/);
+  assert.doesNotMatch(blob, /"jiraStatus":"[^"]+"/);
+  assert.doesNotMatch(blob, /"key":"[A-Z]+-\d+"/);
 });

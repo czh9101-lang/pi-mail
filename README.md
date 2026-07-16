@@ -167,7 +167,9 @@ switch in Board → ⚙ Settings (or set `jiraEnabled: false` via the
 `POST /api/board/config` config object / `set_board_config` MCP tool). It
 defaults to **on**, so existing setups keep syncing until you opt out.
 
-With Jira disabled the board runs in **board-only mode**:
+With Jira disabled the board runs in **board-only mode** (the same mode
+applies whenever Jira is not configured — i.e. no credentials set — so an
+unconfigured board never surfaces stale Jira ticket references either):
 
 - **No Jira network calls** — the periodic sync, startup sync, transitions on
   move, comment mirroring, and issue creation all short-circuit (credentials
@@ -175,8 +177,10 @@ With Jira disabled the board runs in **board-only mode**:
   creds).
 - **Zero Jira references in board output** — `board_list_tasks`,
   `board_get_task`, the web UI, and every board request hide Jira keys,
-  statuses, URLs, and origin badges. Already-synced tasks are displayed as
-  local cards; their stored Jira data is preserved and restored the moment
+  statuses, URLs, and origin badges — including the per-column `(jira: …)`
+  mapping annotations, which render as `(board-only)`. Already-synced tasks
+  are displayed as local cards; their stored Jira data is preserved and
+  restored the moment
   you re-enable Jira.
 
 ### Columns — including ones Jira doesn't have

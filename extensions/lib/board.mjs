@@ -356,17 +356,22 @@ export function boardState(actorId, opts = {}) {
       return loc !== "archive" || showArchive;
     });
   }
-  // Jira-disable scrub (task 6e6e2ab2): when Jira is disabled the board runs
-  // board-only and no Jira ticket info may surface in any board request. We
-  // scrub at this single choke point (every read path — socket board_state,
-  // HTTP /api/board, the hosted MCP backend, the stdio MCP's httpBackend —
-  // funnels through boardState) so board_list_tasks and every board request
-  // contain zero Jira references. Stored state is untouched: only the returned
-  // VIEW is scrubbed (shallow copies), so re-enabling Jira restores the keys.
-  const jiraOn = board.config.jiraEnabled !== false;
+  // Jira-disable scrub (task 6e6e2ab2): the board runs board-only whenever
+  // Jira is effectively off — either because the master switch is flipped
+  // off (jiraEnabled:false) OR because no credentials are configured
+  // (jiraCfg() returns null). In board-only mode no Jira ticket info may
+  // surface in any board request. We scrub at this single choke point (every
+  // read path — socket board_state, HTTP /api/board, the hosted MCP backend,
+  // the stdio MCP's httpBackend — funnels through boardState) so
+  // board_list_tasks and every board request contain zero Jira references,
+  // including the per-column "(jira: …)" mapping annotations and jiraStatus
+  // labels. Stored state is untouched: only the returned VIEW is scrubbed
+  // (shallow copies), so adding credentials / re-enabling Jira restores the
+  // keys on the next read.
+  const jiraActive = !!jiraCfg();
   let viewTasks = tasks;
   let viewColumns = board.columns;
-  if (!jiraOn) {
+  if (!jiraActive) {
     viewTasks = tasks.map((t) =>
       t.origin === "jira" || t.key || t.jiraStatus || t.url || t.parentKey
         ? { ...t, key: null, jiraStatus: null, url: null, parentKey: null, origin: "local" }
@@ -379,11 +384,11 @@ export function boardState(actorId, opts = {}) {
   return {
     columns: viewColumns,
     tasks: viewTasks,
-    jiraConfigured: !!jiraCfg(),
-    /** Master switch value (task 6e6e2ab2): false = Jira disabled, board-only
-     *  mode (no sync, no push, Jira fields scrubbed from this view). True =
-     *  current behaviour (on when credentials are set). */
-    jiraEnabled: jiraOn,
+    jiraConfigured: jiraActive,
+    /** Master switch value (task 6e6e2ab2): false = user explicitly disabled
+     *  Jira. Distinct from `jiraConfigured` (creds present): the board is
+     *  board-only (and the view scrubbed) whenever EITHER is false. */
+    jiraEnabled: board.config.jiraEnabled !== false,
     lastSync: board.lastSync,
     syncError: board.syncError,
     myGroup: agentGroup(actorId) ?? null,
