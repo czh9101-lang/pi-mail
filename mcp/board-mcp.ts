@@ -309,7 +309,7 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
   // ── set_board_config ─────────────────────────────────────────────────────
   server.tool(
     "set_board_config",
-    "Update board + Jira configuration (baseUrl, email, apiToken, jql, projectKey, issueType, subtaskIssueType, columns). Use to enable Jira sync.",
+    "Update board + Jira configuration (jiraEnabled, baseUrl, email, apiToken, jql, projectKey, issueType, subtaskIssueType, columns). Set jiraEnabled:false to disable Jira entirely (board-only mode: no sync, no push, Jira fields hidden from output). Use to enable/disable Jira sync.",
     {
       config: z.record(z.unknown()).describe("Partial board config object"),
     },
@@ -326,7 +326,7 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
   // ── sync_board ────────────────────────────────────────────────────────────
   server.tool(
     "sync_board",
-    "Trigger a manual Jira sync (pull remote changes, push local moves). Only when Jira is configured.",
+    "Trigger a manual Jira sync (pull remote changes, push local moves). Only when Jira is enabled and configured.",
     {},
     async () => {
       try {

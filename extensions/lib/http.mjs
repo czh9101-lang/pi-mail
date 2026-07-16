@@ -289,6 +289,7 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
           issueType: board.config.issueType,
           subtaskIssueType: board.config.subtaskIssueType,
           apiTokenSet: !!board.config.apiToken,
+          jiraEnabled: board.config.jiraEnabled !== false,
           nudgeEnabled: board.config.nudgeEnabled !== false,
           nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
           mmEnabled: board.config.mmEnabled === true,
@@ -316,7 +317,8 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
 
     if (req.method === "POST" && url.pathname === "/api/board/sync") {
       if (!jiraCfg()) {
-        json(res, 200, { ok: false, error: "Jira is not configured" });
+        const reason = board.config.jiraEnabled === false ? "Jira is disabled" : "Jira is not configured";
+        json(res, 200, { ok: false, error: reason });
         return;
       }
       await syncBoard("manual");

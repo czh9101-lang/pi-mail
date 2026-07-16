@@ -92,6 +92,14 @@ export const DEFAULT_COLUMNS = [
  */
 export let board = {
   config: {
+    // Jira integration master switch. Defaults to true so existing users
+    // with credentials keep Jira on (no behaviour change). When false the
+    // board runs in board-only mode: jiraCfg() returns null (no network
+    // calls, no sync, no push on move/comment/create) and boardState scrubs
+    // every Jira ticket reference (key/status/url/origin/parentKey) from its
+    // output so board_list_tasks and all board requests surface zero Jira
+    // info. Set via the UI (Board → Settings) or the config endpoint.
+    jiraEnabled: true,
     baseUrl: process.env.JIRA_BASE_URL || "",
     email: process.env.JIRA_EMAIL || "",
     apiToken: process.env.JIRA_API_TOKEN || "",
@@ -174,7 +182,7 @@ export function loadBoard() {
       for (const k of ["baseUrl", "email", "apiToken", "jql", "projectKey", "issueType", "subtaskIssueType"]) {
         if (saved.config?.[k]) board.config[k] = saved.config[k];
       }
-      for (const k of ["nudgeEnabled", "mmEnabled", "ceoEnabled"]) {
+      for (const k of ["nudgeEnabled", "mmEnabled", "ceoEnabled", "jiraEnabled"]) {
         if (typeof saved.config?.[k] === "boolean") board.config[k] = saved.config[k];
       }
       for (const k of ["nudgeIntervalMin", "mmIntervalMin", "mmMaxLifetimeMin", "workerMaxLifetimeMin", "ceoIntervalMin", "ceoMaxLifetimeMin", "chatIdleMin"]) {
@@ -203,6 +211,11 @@ export function loadBoard() {
 
 export function jiraCfg() {
   const c = board.config;
+  // The master switch: when Jira is disabled the board runs in board-only
+  // mode regardless of whether credentials are set — no sync, no push, no
+  // network calls. Defaults to enabled (true) so existing users are
+  // unaffected until they opt out.
+  if (c.jiraEnabled === false) return null;
   return c.baseUrl && c.email && c.apiToken ? c : null;
 }
 
@@ -343,10 +356,34 @@ export function boardState(actorId, opts = {}) {
       return loc !== "archive" || showArchive;
     });
   }
+  // Jira-disable scrub (task 6e6e2ab2): when Jira is disabled the board runs
+  // board-only and no Jira ticket info may surface in any board request. We
+  // scrub at this single choke point (every read path — socket board_state,
+  // HTTP /api/board, the hosted MCP backend, the stdio MCP's httpBackend —
+  // funnels through boardState) so board_list_tasks and every board request
+  // contain zero Jira references. Stored state is untouched: only the returned
+  // VIEW is scrubbed (shallow copies), so re-enabling Jira restores the keys.
+  const jiraOn = board.config.jiraEnabled !== false;
+  let viewTasks = tasks;
+  let viewColumns = board.columns;
+  if (!jiraOn) {
+    viewTasks = tasks.map((t) =>
+      t.origin === "jira" || t.key || t.jiraStatus || t.url || t.parentKey
+        ? { ...t, key: null, jiraStatus: null, url: null, parentKey: null, origin: "local" }
+        : t
+    );
+    viewColumns = board.columns.map((c) =>
+      c.jiraStatus ? { ...c, jiraStatus: null } : c
+    );
+  }
   return {
-    columns: board.columns,
-    tasks,
+    columns: viewColumns,
+    tasks: viewTasks,
     jiraConfigured: !!jiraCfg(),
+    /** Master switch value (task 6e6e2ab2): false = Jira disabled, board-only
+     *  mode (no sync, no push, Jira fields scrubbed from this view). True =
+     *  current behaviour (on when credentials are set). */
+    jiraEnabled: jiraOn,
     lastSync: board.lastSync,
     syncError: board.syncError,
     myGroup: agentGroup(actorId) ?? null,

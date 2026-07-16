@@ -71,6 +71,8 @@ export interface BoardState {
   columns: BoardColumn[];
   tasks: BoardTask[];
   jiraConfigured: boolean;
+  /** Master switch (task 6e6e2ab2): false = Jira disabled, board-only mode. */
+  jiraEnabled?: boolean;
   lastSync: number | null;
   syncError: string | null;
   /** The caller's own project group (cwd basename), or null for the operator. */

@@ -161,6 +161,12 @@ export function boardSetConfig({ config, columns } = {}) {
       if (typeof config[k] === "string") board.config[k] = config[k].trim();
     }
     if (typeof config.nudgeEnabled === "boolean") board.config.nudgeEnabled = config.nudgeEnabled;
+    // Jira master switch (task 6e6e2ab2). Defaults to true; setting it false
+    // disables Jira entirely (board-only mode): jiraCfg() returns null, sync
+    // stops, and boardState scrubs Jira fields from output. Restored on restart
+    // even when false. Note: disabling does NOT delete credentials, so toggling
+    // back on resumes sync with the stored creds.
+    if (typeof config.jiraEnabled === "boolean") board.config.jiraEnabled = config.jiraEnabled;
     if (typeof config.nudgeIntervalMin === "number" && Number.isFinite(config.nudgeIntervalMin)) {
       board.config.nudgeIntervalMin = Math.max(1, Math.floor(config.nudgeIntervalMin));
     }

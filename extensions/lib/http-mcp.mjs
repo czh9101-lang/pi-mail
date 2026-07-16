@@ -70,6 +70,7 @@ const inProcessBoardBackend = {
         issueType: board.config.issueType,
         subtaskIssueType: board.config.subtaskIssueType,
         apiTokenSet: !!board.config.apiToken,
+        jiraEnabled: board.config.jiraEnabled !== false,
         nudgeEnabled: board.config.nudgeEnabled !== false,
         nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
         mmEnabled: board.config.mmEnabled === true,
@@ -91,7 +92,10 @@ const inProcessBoardBackend = {
     return boardSetConfig({ config });
   },
   async syncBoard() {
-    if (!jiraCfg()) return { ok: false, error: "Jira is not configured" };
+    if (!jiraCfg()) {
+      const reason = board.config.jiraEnabled === false ? "Jira is disabled" : "Jira is not configured";
+      return { ok: false, error: reason };
+    }
     await syncBoard("manual");
     return { ok: !board.syncError, error: board.syncError ?? undefined };
   },

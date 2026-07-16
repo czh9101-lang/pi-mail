@@ -74,11 +74,13 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
           if (!inArch.length) lines.push("  (empty)");
           for (const t of inArch) lines.push(taskLine(t));
         }
-        const sync = b.jiraConfigured
-          ? b.syncError
-            ? `⚠️ Jira sync error: ${b.syncError}`
-            : `Jira sync: last ${b.lastSync ? new Date(b.lastSync).toLocaleString() : "never"}`
-          : "Jira: not configured (board-only mode)";
+        const sync = b.jiraEnabled === false
+          ? "Jira: disabled (board-only mode)"
+          : b.jiraConfigured
+            ? b.syncError
+              ? `⚠️ Jira sync error: ${b.syncError}`
+              : `Jira sync: last ${b.lastSync ? new Date(b.lastSync).toLocaleString() : "never"}`
+            : "Jira: not configured (board-only mode)";
         const scope = params.group === "all" ? " · all groups" : params.group ? ` · group: ${params.group}` : b.myGroup ? ` · group: ${b.myGroup} (same-group view)` : " · all groups (operator view)";
         return {
           content: [{ type: "text", text: `📋 Task board — ${tasks.length} task(s)\n${sync}${scope}\n\n${lines.join("\n")}` }],

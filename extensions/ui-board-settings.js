@@ -16,6 +16,16 @@ function boardSettingsCard(board) {
   const card = el("div", "card board-settings");
   card.appendChild(el("h2", null, "Board settings"));
 
+  // Jira master switch (task 6e6e2ab2). Defaults on; unchecking disables
+  // Jira entirely (board-only mode): no sync, no push on move/comment/create,
+  // and Jira ticket info is hidden from all board output. Credentials are
+  // kept so toggling back on resumes sync.
+  card.appendChild(el("h3", null, "Jira integration"));
+  const jiraRow = el("div", "row"); jiraRow.style.display = "flex"; jiraRow.style.gap = "8px"; jiraRow.style.alignItems = "center"; jiraRow.style.marginTop = "6px";
+  const jiraCheck = el("input"); jiraCheck.type = "checkbox"; jiraCheck.id = "jiraEnabled"; jiraCheck.checked = (board._cfg?.jiraEnabled !== false);
+  const jiraLabel = el("label", null, "Enable Jira sync (uncheck for board-only mode)"); jiraLabel.htmlFor = "jiraEnabled"; jiraLabel.style.margin = "0";
+  jiraRow.appendChild(jiraCheck); jiraRow.appendChild(jiraLabel); card.appendChild(jiraRow);
+
   // Jira connection
   card.appendChild(el("label", null, "Jira base URL (e.g. https://yourorg.atlassian.net)"));
   const inUrl = el("input"); inUrl.value = board._cfg?.baseUrl ?? ""; card.appendChild(inUrl);
@@ -107,7 +117,7 @@ function boardSettingsCard(board) {
   save.addEventListener("click", async () => {
     save.disabled = true;
     const r = await post("/api/board/config", {
-      config: { baseUrl: inUrl.value, email: inMail.value, apiToken: inTok.value, jql: inJql.value, projectKey: inProj.value,
+      config: { jiraEnabled: jiraCheck.checked, baseUrl: inUrl.value, email: inMail.value, apiToken: inTok.value, jql: inJql.value, projectKey: inProj.value,
         mmEnabled: mmCheck.checked, mmIntervalMin: parseInt(mmInterval.value, 10), mmModel: mmModel.value, mmMaxLifetimeMin: parseInt(mmMaxLife.value, 10), workerMaxLifetimeMin: parseInt(workerMaxLife.value, 10),
         ceoEnabled: ceoCheck.checked, ceoIntervalMin: parseInt(ceoInterval.value, 10), ceoModel: ceoModel.value, ceoMaxLifetimeMin: parseInt(ceoMaxLife.value, 10) },
       columns: rows,

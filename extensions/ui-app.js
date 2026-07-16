@@ -7,11 +7,15 @@ function renderBoard() {
   // Toolbar
   const bar = el("div", "board-toolbar");
   const sync = el("span", "sync" + (board.syncError ? " err" : ""));
-  sync.textContent = board.jiraConfigured
-    ? (board.syncError ? "⚠ Jira sync error: " + board.syncError : "Jira sync · last " + (board.lastSync ? fmtTime(board.lastSync) : "never"))
-    : "Jira not configured — board-only mode (open Settings)";
+  sync.textContent = board.jiraEnabled === false
+    ? "Jira disabled — board-only mode (open Settings)"
+    : board.jiraConfigured
+      ? (board.syncError ? "⚠ Jira sync error: " + board.syncError : "Jira sync · last " + (board.lastSync ? fmtTime(board.lastSync) : "never"))
+      : "Jira not configured — board-only mode (open Settings)";
   bar.appendChild(sync);
   const syncBtn = el("button", "btn secondary mini", "Sync now");
+  syncBtn.disabled = board.jiraEnabled === false;
+  syncBtn.title = board.jiraEnabled === false ? "Jira is disabled — enable it in Settings to sync" : "Sync with Jira now";
   syncBtn.addEventListener("click", async () => {
     syncBtn.disabled = true;
     const r = await post("/api/board/sync", {});

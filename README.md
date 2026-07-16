@@ -124,7 +124,7 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira?, level?, epicId?, backlog? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`; `backlog:true` creates in the Backlog pool; `level` sets epic/story/task/subtask) |
 | `POST /api/board/update` | `{ taskId, summary?, description? }` | Edit summary/description (pushed to Jira for Jira tasks) |
 | `POST /api/board/flag` | `{ taskId, reason?, clear? }` | Flag a task as ⚠ unclear (or clear the flag) |
-| `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout |
+| `GET/POST /api/board/config` | `{ config?, columns? }` | Read/update Jira connection + column layout. `config.jiraEnabled` toggles Jira off entirely (board-only mode) |
 | `POST /api/board/sync` | — | Force a Jira sync now |
 | `GET /api/mm` | — | Middle-manager state: config + active MM sessions |
 | `GET /api/ceo` | — | CEO state: config + active CEO sessions |
@@ -159,6 +159,25 @@ Configure Jira in the UI (Board → ⚙ Settings): base URL
 the JQL. Env vars `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_JQL`
 serve as defaults. Without Jira the board still works in board-only mode.
 State persists in `~/.pi/agent/mail-board.json`.
+
+#### Disabling Jira integration
+
+If you don't use Jira, turn it off entirely with the **Enable Jira sync**
+switch in Board → ⚙ Settings (or set `jiraEnabled: false` via the
+`POST /api/board/config` config object / `set_board_config` MCP tool). It
+defaults to **on**, so existing setups keep syncing until you opt out.
+
+With Jira disabled the board runs in **board-only mode**:
+
+- **No Jira network calls** — the periodic sync, startup sync, transitions on
+  move, comment mirroring, and issue creation all short-circuit (credentials
+  are kept, so flipping the switch back on resumes sync with the stored
+  creds).
+- **Zero Jira references in board output** — `board_list_tasks`,
+  `board_get_task`, the web UI, and every board request hide Jira keys,
+  statuses, URLs, and origin badges. Already-synced tasks are displayed as
+  local cards; their stored Jira data is preserved and restored the moment
+  you re-enable Jira.
 
 ### Columns — including ones Jira doesn't have
 

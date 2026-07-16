@@ -1,0 +1,178 @@
+// Tests for the Jira-disable master switch (task 6e6e2ab2).
+//
+// Adds a `jiraEnabled` config flag (default true → no behaviour change for
+// existing users). When false the board runs in board-only mode:
+//   - jiraCfg() returns null → no network calls (sync, transitions, comments,
+//     issue creation all short-circuit), jiraConfigured reports false.
+//   - boardState scrubs every Jira ticket reference (key, jiraStatus, url,
+//     parentKey, origin→"local") from its returned VIEW so board_list_tasks
+//     and all board requests surface zero Jira info. Stored state is
+//     untouched, so re-enabling restores the keys.
+//
+// These are pure unit tests of board.mjs (jiraCfg + boardState): they seed
+// board.config / board.columns / board.tasks directly — no daemon/socket/
+// tmux/network. They mirror the style of board-group-filter.test.mjs.
+//
+// Run: npm test
+
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import {
+  board,
+  jiraCfg,
+  boardState,
+  DEFAULT_COLUMNS,
+} from "../extensions/lib/board.mjs";
+import { HUMAN_AGENT_ID } from "../extensions/lib/core.mjs";
+
+// A board with one Jira-origin task (key/status/url/parentKey set) and one
+// local task, plus a Jira-mapped column, so we can assert scrubbing.
+const JIRA_TASK = {
+  id: "t-jira-1",
+  key: "PROJ-123",
+  origin: "jira",
+  summary: "imported from jira",
+  description: "",
+  url: "https://acme.atlassian.net/browse/PROJ-123",
+  jiraStatus: "In Progress",
+  columnId: "inprogress",
+  assignee: null,
+  priority: "High",
+  issueType: "Task",
+  parentId: null,
+  parentKey: "PROJ-100",
+  flagged: null,
+  updatedAt: 0,
+  location: "board",
+  level: "task",
+  activity: [],
+};
+const LOCAL_TASK = {
+  id: "t-local-1",
+  key: null,
+  origin: "local",
+  summary: "a local task",
+  description: "",
+  url: null,
+  jiraStatus: null,
+  columnId: "todo",
+  assignee: null,
+  priority: null,
+  issueType: null,
+  parentId: null,
+  parentKey: null,
+  flagged: null,
+  updatedAt: 0,
+  location: "board",
+  level: "task",
+  activity: [],
+};
+
+let savedCfg, savedColumns, savedTasks;
+
+before(() => {
+  savedCfg = { ...board.config };
+  savedColumns = board.columns;
+  savedTasks = board.tasks;
+  board.columns = DEFAULT_COLUMNS;
+  board.tasks = [JIRA_TASK, LOCAL_TASK];
+});
+
+after(() => {
+  board.config = savedCfg;
+  board.columns = savedColumns;
+  board.tasks = savedTasks;
+});
+
+function withCreds() {
+  // Credentials present so jiraCfg() would be non-null when enabled.
+  board.config.baseUrl = "https://acme.atlassian.net";
+  board.config.email = "bot@acme.com";
+  board.config.apiToken = "secret-token";
+}
+
+test("jiraEnabled defaults to true (no behaviour change for existing users)", () => {
+  withCreds();
+  delete board.config.jiraEnabled; // force default
+  assert.equal(jiraCfg(), board.config, "with creds + default flag → Jira is active");
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  assert.equal(st.jiraEnabled, true);
+  assert.equal(st.jiraConfigured, true);
+});
+
+test("jiraEnabled:false makes jiraCfg() return null even with credentials set", () => {
+  withCreds();
+  board.config.jiraEnabled = false;
+  assert.equal(jiraCfg(), null, "disabled short-circuits jiraCfg regardless of creds");
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  assert.equal(st.jiraEnabled, false);
+  assert.equal(st.jiraConfigured, false, "jiraConfigured reports false when disabled");
+});
+
+test("jiraEnabled:false scrubs all Jira ticket references from the board view", () => {
+  withCreds();
+  board.config.jiraEnabled = false;
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const jiraView = st.tasks.find((t) => t.id === "t-jira-1");
+  assert.equal(jiraView.key, null, "key scrubbed");
+  assert.equal(jiraView.jiraStatus, null, "jiraStatus scrubbed");
+  assert.equal(jiraView.url, null, "url scrubbed");
+  assert.equal(jiraView.parentKey, null, "parentKey scrubbed (was a Jira key)");
+  assert.equal(jiraView.origin, "local", "origin relabelled to local");
+  // Non-Jira metadata is preserved (these aren't ticket references).
+  assert.equal(jiraView.summary, "imported from jira");
+  assert.equal(jiraView.priority, "High");
+  assert.equal(jiraView.id, "t-jira-1");
+});
+
+test("jiraEnabled:false scrubs jiraStatus off Jira-mapped columns", () => {
+  withCreds();
+  board.config.jiraEnabled = false;
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const inProgress = st.columns.find((c) => c.id === "inprogress");
+  assert.equal(inProgress.jiraStatus, null, "column jiraStatus scrubbed → renders as board-only");
+  // The stored column is untouched (only the view copy is scrubbed).
+  assert.equal(board.columns.find((c) => c.id === "inprogress").jiraStatus, "In Progress");
+});
+
+test("jiraEnabled:false leaves local tasks untouched in the view", () => {
+  withCreds();
+  board.config.jiraEnabled = false;
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const localView = st.tasks.find((t) => t.id === "t-local-1");
+  // No shallow-copy needed → same reference, unchanged.
+  assert.equal(localView, LOCAL_TASK, "local task with no Jira fields is returned as-is");
+});
+
+test("stored state is NOT mutated by the scrub (re-enabling restores keys)", () => {
+  withCreds();
+  board.config.jiraEnabled = false;
+  boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const stored = board.tasks.find((t) => t.id === "t-jira-1");
+  assert.equal(stored.key, "PROJ-123", "stored key intact");
+  assert.equal(stored.jiraStatus, "In Progress", "stored status intact");
+  assert.equal(stored.url, "https://acme.atlassian.net/browse/PROJ-123", "stored url intact");
+  assert.equal(stored.origin, "jira", "stored origin intact");
+  // Re-enable → keys reappear in the view.
+  board.config.jiraEnabled = true;
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  const jiraView = st.tasks.find((t) => t.id === "t-jira-1");
+  assert.equal(jiraView.key, "PROJ-123", "key visible again after re-enabling");
+  assert.equal(jiraView.origin, "jira");
+  assert.equal(st.jiraConfigured, true);
+});
+
+test("jiraEnabled:true with no credentials behaves as before (not configured)", () => {
+  board.config.jiraEnabled = true;
+  board.config.baseUrl = "";
+  board.config.email = "";
+  board.config.apiToken = "";
+  assert.equal(jiraCfg(), null, "enabled but unconfigured → null (board-only)");
+  const st = boardState(HUMAN_AGENT_ID, { includeArchived: false });
+  assert.equal(st.jiraEnabled, true);
+  assert.equal(st.jiraConfigured, false);
+  // No scrubbing happens when enabled (even if unconfigured): the Jira task
+  // keeps its key so an operator who later adds creds sees the right data.
+  const jiraView = st.tasks.find((t) => t.id === "t-jira-1");
+  assert.equal(jiraView.key, "PROJ-123", "enabled (unconfigured) keeps key in view");
+});
