@@ -140,6 +140,16 @@ function childrenOf(t, board) {
   return (board.tasks ?? []).filter(x => x.parentId === t.id || (t.key && x.parentKey === t.key));
 }
 
+/** Find the parent task of a subtask. Uses parentId (local) first, then
+ *  parentKey (Jira), falling back to a fuzzy find on board tasks. */
+function parentOf(t, board) {
+  if (!t.parentId && !t.parentKey) return null;
+  const tasks = board.tasks ?? [];
+  return tasks.find(x => t.parentId && x.id === t.parentId) ||
+         tasks.find(x => t.parentKey && x.key === t.parentKey) ||
+         null;
+}
+
 function taskCard(t, board) {
   const card = el("div", "tcard" + (t.flagged ? " flagged" : "") + (isSubtask(t) ? " subtask" : ""));
   // Drag-and-drop: make the card draggable. The drop is handled by the
@@ -193,7 +203,20 @@ function taskCard(t, board) {
     fb.title = "Flagged by " + t.flagged.by + ": " + t.flagged.reason;
     meta.appendChild(fb);
   }
-  if (isSubtask(t)) meta.appendChild(el("span", "badge sub", "↳ " + (t.parentKey || "subtask")));
+  if (isSubtask(t)) {
+    const parent = parentOf(t, board);
+    const parentLabel = parent
+      ? (parent.key ? parent.key + ": " : "") + parent.summary
+      : (t.parentKey || "parent task");
+    const pb = el("span", "badge sub parentref", "↳ " + parentLabel);
+    pb.title = "Click to open parent task";
+    if (parent) {
+      pb.style.cursor = "pointer";
+      pb.style.textDecoration = "underline";
+      pb.addEventListener("click", (e) => { e.stopPropagation(); openTaskModal(parent.id); });
+    }
+    meta.appendChild(pb);
+  }
   const kids = childrenOf(t, board);
   if (kids.length) {
     const doneCol = board.columns.length ? board.columns[board.columns.length - 1].id : null;

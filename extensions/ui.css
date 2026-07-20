@@ -212,6 +212,8 @@
   .badge.custom { color: var(--warning); border-color: var(--warning); }
   .badge.flag { color: var(--error); border-color: var(--error); }
   .badge.sub { color: var(--dim); }
+  .badge.parentref { color: var(--accent2); border-color: var(--accent); }
+  .badge.parentref:hover { background: var(--accent); color: var(--on-accent); }
   .tcard.flagged { border-color: var(--error); }
   .tcard.subtask { margin-left: 14px; border-left: 2px solid var(--border); }
   .bcol .binstr { color: var(--dim); font-size: 11px; margin-bottom: 8px; white-space: pre-wrap; border-left: 2px solid var(--warning); padding-left: 8px; }
