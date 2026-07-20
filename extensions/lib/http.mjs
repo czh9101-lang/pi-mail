@@ -250,7 +250,7 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
 
     if (req.method === "POST" && url.pathname === "/api/board/assign") {
       const body = await readJsonBody(req);
-      const r = boardAssign(HUMAN_AGENT_ID, body.taskId, body.assignee, !!body.newSession);
+      const r = await boardAssign(HUMAN_AGENT_ID, body.taskId, body.assignee, !!body.newSession);
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, warning: r.warning });
       return;
     }

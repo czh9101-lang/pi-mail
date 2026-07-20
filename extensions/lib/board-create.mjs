@@ -13,6 +13,7 @@ import {
   board,
   DEFAULT_JQL,
   jiraCfg,
+  jiraPushOk,
   findBoardTask,
   findBoardColumn,
   taskActivity,
@@ -139,7 +140,7 @@ export async function boardUpdate(actorId, taskSpec, { summary, description } = 
   }
   if (!changes.length) return { error: "Nothing to update (pass summary and/or description)" };
   let warning;
-  if (task.origin === "jira" && jiraCfg()) {
+  if (task.origin === "jira" && jiraPushOk()) {
     try {
       await jiraUpdateIssue(task.key, {
         summary: changes.includes("summary") ? task.summary : undefined,
@@ -167,6 +168,7 @@ export function boardSetConfig({ config, columns } = {}) {
     // even when false. Note: disabling does NOT delete credentials, so toggling
     // back on resumes sync with the stored creds.
     if (typeof config.jiraEnabled === "boolean") board.config.jiraEnabled = config.jiraEnabled;
+    if (typeof config.pushEnabled === "boolean") board.config.pushEnabled = config.pushEnabled;
     if (typeof config.nudgeIntervalMin === "number" && Number.isFinite(config.nudgeIntervalMin)) {
       board.config.nudgeIntervalMin = Math.max(1, Math.floor(config.nudgeIntervalMin));
     }

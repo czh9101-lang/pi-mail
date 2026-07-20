@@ -101,6 +101,41 @@ export async function jiraTransitionTo(task, statusName) {
   task.jiraStatus = statusName;
 }
 
+/**
+ * Assign or unassign a Jira issue. Resolves the assignee name to a Jira
+ * accountId via user search (takes the first match). Pass an empty string
+ * to unassign. Returns the accountId or null (unassigned).
+ */
+export async function jiraUpdateAssignee(key, assigneeName) {
+  const name = String(assigneeName ?? "").trim();
+  if (!name) {
+    // Unassign: PUT with accountId: null
+    await jiraFetch(`/rest/api/3/issue/${key}/assignee`, {
+      method: "PUT",
+      body: { accountId: null },
+    });
+    return null;
+  }
+  // Search for the Jira user by display name / email.
+  const qs = new URLSearchParams({ query: name, maxResults: "5" });
+  const results = await jiraFetch(`/rest/api/3/user/search?${qs}`);
+  const user = (results ?? []).find(
+    (u) =>
+      (u.displayName ?? "").toLowerCase() === name.toLowerCase() ||
+      (u.emailAddress ?? "").toLowerCase() === name.toLowerCase()
+  ) ?? results?.[0];
+  if (!user?.accountId) {
+    throw new Error(
+      `no Jira user found for "${name}" (searched by display name and email)`
+    );
+  }
+  await jiraFetch(`/rest/api/3/issue/${key}/assignee`, {
+    method: "PUT",
+    body: { accountId: user.accountId },
+  });
+  return user.accountId;
+}
+
 /** @returns {Promise<string | null>} the created Jira comment id */
 export async function jiraAddComment(key, text) {
   const r = await jiraFetch(`/rest/api/3/issue/${key}/comment`, {

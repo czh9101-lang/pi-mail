@@ -17,6 +17,7 @@ import {
   DEFAULT_JQL,
   DEFAULT_COLUMNS,
   jiraCfg,
+  jiraPushOk,
   findBoardTask,
   findBoardColumn,
   levelFromIssueType,
@@ -36,6 +37,7 @@ import {
   jiraAddComment,
   jiraCreateIssue,
   jiraUpdateIssue,
+  jiraUpdateAssignee,
   syncBoard,
 } from "./jira.mjs";
 
@@ -102,7 +104,7 @@ export async function boardMove(actorId, taskSpec, columnSpec, note) {
     }
   }
   // Push the matching Jira transition when moving into a Jira-mapped column.
-  if (column.jiraStatus && task.origin === "jira" && jiraCfg() &&
+  if (column.jiraStatus && task.origin === "jira" && jiraPushOk() &&
       column.jiraStatus.toLowerCase() !== (task.jiraStatus ?? "").toLowerCase()) {
     try {
       await jiraTransitionTo(task, column.jiraStatus);
@@ -114,7 +116,7 @@ export async function boardMove(actorId, taskSpec, columnSpec, note) {
   }
   // Push the folded description to Jira too (the transition above only moves
   // status; the new "Progress so far" block is part of the spec to carry over).
-  if (folded && task.origin === "jira" && jiraCfg()) {
+  if (folded && task.origin === "jira" && jiraPushOk()) {
     try {
       await jiraUpdateIssue(task.key, { description: task.description });
     } catch (e) {
@@ -134,7 +136,7 @@ export async function boardMove(actorId, taskSpec, columnSpec, note) {
   return { ok: true, task, warning };
 }
 
-export function boardAssign(actorId, taskSpec, assignee, newSession) {
+export async function boardAssign(actorId, taskSpec, assignee, newSession) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
   const actor = agentDisplayName(actorId);
@@ -186,6 +188,23 @@ export function boardAssign(actorId, taskSpec, assignee, newSession) {
     );
     if (n.warning) warning = `assignee not mailed: ${n.warning}`;
   }
+  // Push assignment change to Jira for synced tasks.
+  if (task.origin === "jira" && jiraPushOk()) {
+    try {
+      const accountId = await jiraUpdateAssignee(task.key, task.assignee);
+      taskActivity(
+        task,
+        "jira",
+        task.assignee
+          ? `assigned to ${task.assignee} (Jira accountId: ${accountId})`
+          : "unassigned in Jira"
+      );
+    } catch (e) {
+      const w = `Jira assignee update failed: ${e.message}`;
+      taskActivity(task, "board", w);
+      if (!warning) warning = w;
+    }
+  }
   schedulePersistBoard();
   return { ok: true, task, warning };
 }
@@ -199,7 +218,7 @@ export async function boardComment(actorId, taskSpec, text) {
   const actor = agentDisplayName(actorId);
   taskActivity(task, actor, body);
   let warning;
-  if (task.origin === "jira" && jiraCfg()) {
+  if (task.origin === "jira" && jiraPushOk()) {
     try {
       const commentId = await jiraAddComment(task.key, `[${actor} via pi-mail board]\n\n${body}`);
       // Remember our own comment id so the pull sync doesn't re-import it.

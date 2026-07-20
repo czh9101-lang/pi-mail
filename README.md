@@ -118,7 +118,7 @@ The SPA talks to a tiny JSON API you can also call directly:
 | `POST /api/archive` | `{ id }` | `{ ok }` — archives a message in the human inbox |
 | `GET /api/board` | — | Board snapshot: `{ columns[], tasks[], jiraConfigured, lastSync, syncError }`. Query: `?location=board\|backlog\|archive&includeArchived=true&group=all\|<name>` (archive hidden by default) |
 | `POST /api/board/move` | `{ taskId, column, note? }` | Move a task to a column, or to `backlog`/`archive` (off-board; local-only). Jira transition if the column is mapped |
-| `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package |
+| `POST /api/board/assign` | `{ taskId, assignee, newSession? }` | Assign a task; the assignee is mailed the task package. For Jira-synced tasks, also pushes the assignee change to the Jira issue (when push is enabled) |
 | `POST /api/board/comment` | `{ taskId, text }` | Comment (also posted to Jira for Jira tasks) |
 | `POST /api/board/progress` | `{ taskId, text }` | Post an internal progress update (folded into the description on move; not posted to Jira) |
 | `POST /api/board/create` | `{ summary, description?, column?, parent?, inJira?, level?, epicId?, backlog? }` | Create a task (subtask under `parent`; Jira issue when parent is Jira or `inJira`; `backlog:true` creates in the Backlog pool; `level` sets epic/story/task/subtask) |
@@ -158,10 +158,15 @@ Beyond the kanban columns there are two off-board pools — **Backlog** and
   interval pulls issues only (columns change rarely).
 - **Push**: moving a task into a column that maps to a Jira status performs the
   matching Jira transition. Board comments on Jira tasks are posted to the
-  issue. Summary/description edits are pushed to the issue. Agents can
+  issue. Board assignments on Jira tasks update the Jira assignee.
+  Summary/description edits are pushed to the issue. Agents can
   **subdivide** a Jira task (`board_split_task`) — subtasks are created as real
   Jira sub-tasks under the parent; top-level issues can be created with
   `inJira: true` (uses the configured project key).
+  Push can be disabled independently via `pushEnabled: false` in board config
+  (default `true`) — pull sync continues to run, but transitions, comments,
+  assignments, and description updates stay local. Push failures are logged
+  and surfaced as warnings but never block board operations.
 
 Configure Jira in the UI (Board → ⚙ Settings): base URL
 (`https://yourorg.atlassian.net`), account email, an
@@ -176,6 +181,12 @@ If you don't use Jira, turn it off entirely with the **Enable Jira sync**
 switch in Board → ⚙ Settings (or set `jiraEnabled: false` via the
 `POST /api/board/config` config object / `set_board_config` MCP tool). It
 defaults to **on**, so existing setups keep syncing until you opt out.
+
+You can also **disable push only** by setting `pushEnabled: false` while
+leaving `jiraEnabled: true`. Pull sync (Jira → board) keeps running, but
+board→Jira push — transitions, comments, assignments, and description
+updates — is suppressed. This is useful when you want to read from Jira
+without writing back.
 
 With Jira disabled the board runs in **board-only mode** (the same mode
 applies whenever Jira is not configured — i.e. no credentials set — so an

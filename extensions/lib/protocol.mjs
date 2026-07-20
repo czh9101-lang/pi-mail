@@ -202,8 +202,9 @@ export function handleMessage(agentId, msg, socket) {
     }
 
     case "board_assign": {
-      const r = boardAssign(agentId, msg.taskId, msg.assignee, !!msg.newSession);
-      reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task, warning: r.warning });
+      boardAssign(agentId, msg.taskId, msg.assignee, !!msg.newSession)
+        .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task, warning: r.warning }))
+        .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
       break;
     }
 

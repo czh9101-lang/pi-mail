@@ -100,6 +100,11 @@ export let board = {
     // output so board_list_tasks and all board requests surface zero Jira
     // info. Set via the UI (Board → Settings) or the config endpoint.
     jiraEnabled: true,
+    // Push sync toggle: when false, board→Jira push (transitions, comments,
+    // assignments, description updates) is disabled, but Jira→board pull sync
+    // continues to run. Defaults to true so both directions are active when
+    // Jira is configured. Set via board config endpoint or UI.
+    pushEnabled: true,
     baseUrl: process.env.JIRA_BASE_URL || "",
     email: process.env.JIRA_EMAIL || "",
     apiToken: process.env.JIRA_API_TOKEN || "",
@@ -217,6 +222,18 @@ export function jiraCfg() {
   // unaffected until they opt out.
   if (c.jiraEnabled === false) return null;
   return c.baseUrl && c.email && c.apiToken ? c : null;
+}
+
+/**
+ * Whether board→Jira push should happen. Mirrors jiraCfg() but also requires
+ * pushEnabled (default true) so push can be disabled independently while pull
+ * continues to run. Returns the config object on success, null when push is off.
+ */
+export function jiraPushOk() {
+  const cfg = jiraCfg();
+  if (!cfg) return null;
+  if (board.config.pushEnabled === false) return null;
+  return cfg;
 }
 
 export function findBoardTask(spec) {

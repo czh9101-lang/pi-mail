@@ -112,7 +112,7 @@ const inProcessBoardBackend = {
     return r.error ? { ok: false, error: r.error } : { ok: true };
   },
   async assignTask(taskId, assignee, newSession) {
-    const r = boardAssign(HUMAN_AGENT_ID, taskId, assignee, !!newSession);
+    const r = await boardAssign(HUMAN_AGENT_ID, taskId, assignee, !!newSession);
     return r.error ? { ok: false, error: r.error } : { ok: true, warning: r.warning };
   },
   async createTask(body) {
