@@ -64,6 +64,7 @@ const UI_ASSET_TYPES = {
   "/ui-spawn.js": "text/javascript; charset=utf-8",
   "/ui-terminal.js": "text/javascript; charset=utf-8",
   "/ui-mailbox.js": "text/javascript; charset=utf-8",
+  "/ui-logs.js": "text/javascript; charset=utf-8",
   "/ui-app.js": "text/javascript; charset=utf-8",
 };
 
