@@ -63,6 +63,22 @@ function renderBoard() {
   const blBtn = el("button", "btn secondary mini", "📥 Backlog" + (blCount ? " (" + blCount + ")" : ""));
   blBtn.addEventListener("click", () => setTab("backlog"));
   bar.appendChild(blBtn);
+  // CEO last-run indicator — shows when the CEO last ran and warns if overdue.
+  const ceoInfo = state.ceo;
+  const ceoLastTs = ceoInfo?.lastSpawnTs || 0;
+  const ceoIntervalMs = (ceoInfo?.intervalMin || 120) * 60_000;
+  const ceoGraceMs = 10 * 60_000; // 10-min grace period before "overdue" warning
+  const ceoAgo = ceoLastTs ? (state.now - ceoLastTs) : null;
+  const ceoOverdue = ceoAgo != null && ceoAgo > (ceoIntervalMs + ceoGraceMs);
+  const ceoLabel = ceoInfo?.enabled
+    ? (ceoLastTs
+      ? "👔 CEO ran " + (ceoAgo < 60_000 ? "just now" : ceoAgo < 3600_000 ? Math.round(ceoAgo / 60_000) + "m ago" : ceoAgo < 86400_000 ? Math.round(ceoAgo / 3600_000) + "h ago" : Math.round(ceoAgo / 86400_000) + "d ago")
+      : "👔 CEO not yet run")
+    : "👔 CEO off";
+  const ceoInd = el("span", "ceo-indicator" + (ceoOverdue ? " overdue" : "") + (ceoInfo?.enabled ? "" : " off"));
+  ceoInd.textContent = ceoLabel;
+  if (ceoLastTs) ceoInd.title = "Last CEO run: " + new Date(ceoLastTs).toLocaleString();
+  bar.appendChild(ceoInd);
   // Run a CEO cycle now (manual trigger). Spawns a top-tier manager pass on
   // demand via a forced ceoTick — reuses the scheduler's own spawnCeo (first
   // favorite cwd, ceoModel, no-overlap guard, canonical ceoKickoff), so no
@@ -290,7 +306,7 @@ function renderHistory() {
 // pushes the hash; the hashchange listener handles navigations that arrive
 // from outside setTab (back/forward, initial deep-link) and no-ops when the
 // hash already matches in-memory state (no render loop).
-const VALID_TABS = ["agents", "board", "backlog", "mailbox", "history", "settings"];
+const VALID_TABS = ["agents", "board", "backlog", "mailbox", "history", "settings", "logs"];
 
 function routeFor(tab, agentId) {
   if (tab === "history" && agentId) return "history/" + agentId;

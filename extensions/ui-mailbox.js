@@ -64,6 +64,37 @@ function mailboxNav() {
     list.appendChild(item);
   }
   nav.appendChild(list);
+
+  // ── Clear All Mail button (with confirmation) ───────────────────────────
+  const clearWrap = el("div", "mb-nav-actions");
+  const clearBtn = el("button", "btn secondary mini", "🗑 Clear All Mail");
+  clearBtn.title = "Permanently delete all stored mail history";
+  clearBtn.style.marginTop = "12px";
+  clearBtn.style.width = "100%";
+  clearBtn.addEventListener("click", () => {
+    if (!confirm("Delete ALL stored mail history?\n\nThis permanently removes every message for every agent. New mail after clearing will work normally. The board, agent registry, and spawn history are not affected.")) return;
+    clearBtn.disabled = true;
+    clearBtn.textContent = "Clearing…";
+    fetch("/api/clear-mail", { method: "POST" })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          toast("✅ All mail history cleared");
+          // Reset the mailbox cache so the conversation list re-renders empty.
+          mailboxUi.messages = [];
+          mailboxUi.cursor = null;
+          mailboxUi.selectedKey = "";
+          refresh();
+        } else {
+          toast("❌ Failed to clear mail history", true);
+        }
+      })
+      .catch(() => toast("❌ Failed to clear mail history", true))
+      .finally(() => { clearBtn.disabled = false; clearBtn.textContent = "🗑 Clear All Mail"; });
+  });
+  clearWrap.appendChild(clearBtn);
+  nav.appendChild(clearWrap);
+
   return nav;
 }
 

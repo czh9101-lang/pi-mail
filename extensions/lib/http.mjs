@@ -18,9 +18,11 @@ import {
   HUMAN_AGENT_NAME,
   log,
   archiveHumanMessage,
+  clearMailHistory,
   sendMail,
   broadcastMail,
   federationAgents,
+  AGENT_DIR,
 } from "./core.mjs";
 import { boardState, board, jiraCfg } from "./board.mjs";
 import {
@@ -43,6 +45,7 @@ import {
   stopAgent,
   setFavorite,
   projectsState,
+  spawnRegistry,
 } from "./spawn.mjs";
 import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
@@ -80,6 +83,7 @@ function federationState() {
     messages: { total: messageLog.length, unread: humanInboxCount() },
     board: boardState(HUMAN_AGENT_ID, { includeArchived: false }),
     spawn: spawnState(),
+    ceo: { enabled: board.config.ceoEnabled === true, intervalMin: board.config.ceoIntervalMin ?? 120, lastSpawnTs: spawnRegistry.ceo?.lastSpawnTs ?? 0 },
     now: Date.now(),
   };
 }
@@ -210,6 +214,13 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       const body = await readJsonBody(req);
       const ok = archiveHumanMessage(body.id);
       json(res, 200, { ok });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/clear-mail") {
+      clearMailHistory();
+      log(`Mail history cleared (${messageLog.length} messages remaining)`);
+      json(res, 200, { ok: true });
       return;
     }
 
@@ -391,6 +402,88 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       const body = await readJsonBody(req);
       const r = stopAgent({ name: body.name });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true });
+      return;
+    }
+
+    // ── Session logs endpoints ────────────────────────────────────────────
+    // List recent pi session log files from ~/.pi/agent/sessions/. Each entry
+    // is a JSONL file; the api returns a sorted list (newest first) with
+    // project group, timestamp, size, and a path for content retrieval.
+
+    if (req.method === "GET" && url.pathname === "/api/logs") {
+      const max = parseInt(url.searchParams.get("max") || "", 10) || 100;
+      const sessionsDir = path.join(AGENT_DIR, "sessions");
+      const entries = [];
+      try {
+        const groups = fs.readdirSync(sessionsDir, { withFileTypes: true });
+        for (const g of groups) {
+          if (!g.isDirectory()) continue;
+          const groupDir = path.join(sessionsDir, g.name);
+          // Strip the "--" wrapper from the dir-slug for display.
+          // The slug is the path with slashes replaced by hyphens; it's lossy
+          // to reverse perfectly (a hyphen could be a slash or a real hyphen),
+          // so we show the slug as-is which is readable and unambiguous.
+          let project = g.name;
+          if (project.startsWith("--")) project = project.slice(2);
+          if (project.endsWith("--")) project = project.slice(0, -2);
+          let files;
+          try { files = fs.readdirSync(groupDir); } catch { continue; }
+          for (const f of files) {
+            if (!f.endsWith(".jsonl")) continue;
+            const fp = path.join(groupDir, f);
+            let stat;
+            try { stat = fs.statSync(fp); } catch { continue; }
+            // Parse timestamp from filename: YYYY-MM-DDTHH-mm-ss-...
+            const tsMatch = f.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/);
+            const ts = tsMatch
+              ? new Date(tsMatch[1], tsMatch[2] - 1, tsMatch[3], tsMatch[4], tsMatch[5], tsMatch[6]).toISOString()
+              : stat.mtime.toISOString();
+            entries.push({
+              name: f,
+              project,
+              path: fp,
+              size: stat.size,
+              ts,
+            });
+          }
+        }
+      } catch { /* sessions dir may not exist */ }
+      entries.sort((a, b) => b.ts.localeCompare(a.ts));
+      json(res, 200, { entries: entries.slice(0, max) });
+      return;
+    }
+
+    // Serve one session log file (JSONL). Accepts ?path=<absolute-path> and
+    // optionally ?tail=<lines> to return only the last N lines.
+    if (req.method === "GET" && url.pathname === "/api/logs/content") {
+      const fp = url.searchParams.get("path");
+      if (!fp) { json(res, 400, { error: "Missing 'path'" }); return; }
+      // Safety: only allow files under ~/.pi/agent/sessions/
+      const sessionsDir = path.resolve(AGENT_DIR, "sessions");
+      if (!path.resolve(fp).startsWith(sessionsDir + path.sep)) {
+        json(res, 403, { error: "Access denied" });
+        return;
+      }
+      let content;
+      try {
+        content = fs.readFileSync(fp, "utf8");
+      } catch (e) {
+        json(res, 404, { error: "File not found: " + (e?.message || String(e)) });
+        return;
+      }
+      const tail = parseInt(url.searchParams.get("tail") || "", 10);
+      if (tail > 0) {
+        const lines = content.split("\n");
+        // Drop trailing empty line
+        if (lines.length && lines[lines.length - 1] === "") lines.pop();
+        content = lines.slice(-tail).join("\n");
+      }
+      // Size guard: refuse to serve files larger than 2MB
+      if (content.length > 2_000_000) {
+        json(res, 413, { error: "File too large" });
+        return;
+      }
+      json(res, 200, { content });
       return;
     }
 

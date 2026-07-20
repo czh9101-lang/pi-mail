@@ -358,6 +358,14 @@ export function messagePage(opts = {}) {
 
 // ── Human inbox operations ───────────────────────────────────────────────────
 
+/** Clear the entire message history (for the "Clear All Mail" feature).
+ *  Persists the empty state immediately. Does not touch the board, agent
+ *  registry, or spawn history. */
+export function clearMailHistory() {
+  messageLog = [];
+  flushHistory();
+}
+
 /** Archive a message addressed to the human (hide from inbox). */
 export function archiveHumanMessage(id) {
   if (!id) return false;

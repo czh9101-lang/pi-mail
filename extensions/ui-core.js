@@ -342,6 +342,7 @@ function render() {
   else if (currentTab === "mailbox") renderMailbox();
   else if (currentTab === "settings") renderSettings();
   else if (currentTab === "history") renderHistory();
+  else if (currentTab === "logs") { loadLogs().then(renderLogs); }
 }
 
 function sortAgents(list) {
