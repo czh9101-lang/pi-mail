@@ -44,7 +44,10 @@ you use are:
 
 - `board_list_tasks` — see the board (you have all-groups visibility). Group the
   tasks by their `group` field: every distinct group with on-board tasks is
-  under your oversight this cycle.
+  under your oversight this cycle. Ungrouped tasks (`group` unset/`—`) are
+  visible-to-all-groups by design — treat them as in scope for whichever
+  favorited/managed project they're most relevant to (don't drop them and
+  don't spawn a bogus "ungrouped" MM for them).
 - `mail_list_agents` — who's connected across the federation (note each agent's
   `cwd` — you need a project's full cwd to spawn an MM for it).
 - `mail_list_projects` — recent project dirs + favorites (with their cwds).

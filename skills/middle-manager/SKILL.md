@@ -37,8 +37,21 @@ First gather the full picture:
 
 1. `mail_list_agents` — who's connected. `board_list_tasks` — every task (you
    see all groups).
-2. Focus only on tasks whose **group** (cwd basename) matches a managed
-   (favorited) project named in your kickoff.
+2. Focus on tasks whose **group** (cwd basename) matches a managed
+   (favorited) project named in your kickoff. **Include ungrouped tasks too**
+   (`group` is unset/`—`): those are visible-to-all-groups by design and are
+   real, actionable work — do not silently drop them just because they lack a
+   group tag. Only tasks belonging to *other, unrelated* groups are out of
+   scope.
+
+   Tasks board-wide can outnumber the tasks in your scope — that's normal, not
+   a bug: it just means the rest of the work belongs to other groups. When you
+   report "N open tasks" to human, always state the scope explicitly, e.g.
+   *"0 open tasks in my managed group(s) (pi-mail); N other tasks exist on the
+   board for other groups — nothing to do for me this cycle."* Never say a
+   bare "0 open tasks" without naming your scope — a human reading that next
+   to the CEO's all-groups summary will otherwise read it as "the board is
+   empty", which is misleading.
 
 Then **iterate every column, every task** (in this order so work flows left to
 right):
