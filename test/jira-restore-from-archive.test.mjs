@@ -12,16 +12,27 @@
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { syncBoard } from "../extensions/lib/jira.mjs";
 import { board, DEFAULT_COLUMNS } from "../extensions/lib/board.mjs";
 
-let savedCfg, savedColumns, savedTasks, savedFetch;
+let savedCfg, savedColumns, savedTasks, savedFetch, savedWriteFileSync;
 
 before(() => {
   savedCfg = { ...board.config };
   savedColumns = board.columns;
   savedTasks = board.tasks;
   savedFetch = globalThis.fetch;
+  // syncBoard() unconditionally calls schedulePersistBoard() → a 300ms-
+  // debounced fs.writeFileSync(BOARD_FILE, ...) in lib/board.mjs. BOARD_FILE
+  // is NOT test-isolated (it's the real ~/.pi/agent/mail-board.json shared
+  // with any live daemon on this host), so calling the real syncBoard() from
+  // a unit test must never let that write hit disk. Stub fs.writeFileSync for
+  // the duration of this file's tests (restored in `after`, well before the
+  // 300ms debounce could fire past the test boundary in practice, and always
+  // harmless even if it does since board state is restored first).
+  savedWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = () => {};
 });
 
 after(() => {
@@ -29,6 +40,7 @@ after(() => {
   board.columns = savedColumns;
   board.tasks = savedTasks;
   globalThis.fetch = savedFetch;
+  fs.writeFileSync = savedWriteFileSync;
 });
 
 function jsonResponse(body) {
