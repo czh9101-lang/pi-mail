@@ -258,8 +258,8 @@
     header { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
     header > div:first-child { flex: 1 1 100%; min-width: 0; }
     header .sub { font-size: 11px; }
-    nav { margin-left: 0; width: 100%; }
-    nav button { flex: 1 1 0; }
+    nav { margin-left: 0; width: 100%; overflow-x: auto; }
+    nav button { flex-shrink: 0; }
     main { padding: 10px; }
     .card { padding: 12px; }
     .two-col { grid-template-columns: 1fr; gap: 12px; }
