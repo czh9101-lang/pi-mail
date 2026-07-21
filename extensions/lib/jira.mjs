@@ -398,18 +398,20 @@ export async function syncBoard(reason = "interval") {
         task.parentKey = f.parent?.key ?? task.parentKey ?? null;
         // Remote status change wins: move the card to the mapped column, even
         // out of a board-only column. Unchanged remote status leaves any local
-        // (board-only) position alone. Backlog/archive are local-only locations
-        // — a Jira status change does NOT pull a task out of them (the operator
-        // decides placement via the board).
+        // position alone. Backlog/archive only stay "sticky" while the remote
+        // Jira status doesn't change — the moment Jira reports a new status,
+        // the task is restored to the board into the mapped column (Jira is
+        // the source of truth for Jira-origin tasks).
         if (status && status !== task.jiraStatus && task.location === "board") {
           task.jiraStatus = status;
           if (mapped) task.columnId = mapped.id;
           taskActivity(task, "jira", `Jira status changed → ${status}`);
         } else if (status && status !== task.jiraStatus) {
-          // Task is in backlog/archive; record the remote status change without
-          // relocating it.
+          const prevLocation = task.location;
           task.jiraStatus = status;
-          taskActivity(task, "jira", `Jira status changed → ${status} (kept in ${task.location})`);
+          if (mapped) task.columnId = mapped.id;
+          task.location = "board";
+          taskActivity(task, "jira", `Jira status changed → ${status} (restored from ${prevLocation})`);
         }
       }
       importJiraComments(task, f.comment);

@@ -25,7 +25,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
     description:
       "Move a board task to another column. Moving into a Jira-mapped column also transitions the Jira issue. " +
       "Moving a task assigned to someone else notifies them by mail (including the column's instructions). " +
-      "The column may also be 'backlog' (park off-board in the shared backlog) or 'archive' (the done board — removes the task from its column incl. Done; restorable). Backlog/archive are local-only (never pushed to Jira).",
+      "The column may also be 'backlog' (park off-board in the shared backlog) or 'archive' (the done board — removes the task from its column incl. Done; restorable). Backlog/archive placements are local-only (never pushed to Jira), but for Jira-origin tasks they only stick while the remote Jira status is unchanged — a Jira status change pulls the task back onto the board into the mapped column.",
     promptSnippet: "Move a task on the shared board",
     promptGuidelines: [
       "Move your assigned board task as you progress: to the in-progress column when starting, and onward when done.",

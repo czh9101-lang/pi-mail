@@ -77,8 +77,12 @@ export const DEFAULT_COLUMNS = [
  * location — where the task sits: "board" (a kanban column, columnId set),
  *            "backlog" (the shared backlog pool above the board, columnId null),
  *            or "archive" (the "done board", columnId null). Backlog + archive
- *            are LOCAL-ONLY — never pushed to Jira; Jira sync won't override a
- *            local backlog/archive placement.
+ *            are LOCAL-ONLY — never pushed to Jira. For Jira-origin tasks this
+ *            placement only sticks while the remote Jira status is unchanged:
+ *            the next syncBoard() that sees a new remote status pulls the task
+ *            back onto the board (into the mapped column), since Jira is the
+ *            source of truth for Jira-origin tasks. Board-only tasks are never
+ *            moved automatically.
  * level — issue hierarchy: epic > story > (task|subtask). Stories may carry an
  *         epicId pointing at their epic. Subtasks have a parentId (split).
  *         Local-only metadata (Jira issueType is synced separately as-is).

@@ -247,7 +247,11 @@ session on assign" checkbox (default on) dispatches with `newSession: true`.
 ### Backlog, Archive & issue hierarchy
 
 On top of the kanban columns there are two **off-board locations** (both
-local-only — never pushed to Jira, and Jira sync won't override them):
+local-only — never pushed to Jira). For Jira-origin tasks these placements
+only stick while the remote Jira status is unchanged: the moment Jira
+reports a new status, the task is pulled back onto the board into the
+mapped column (Jira is the source of truth). Board-only tasks are never
+moved automatically.
 
 - **Backlog** — a shared pool of items not yet placed on a column. Add items
   from the UI (the "backlog" checkbox on the new-task row), via
