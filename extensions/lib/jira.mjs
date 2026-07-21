@@ -412,6 +412,23 @@ export async function syncBoard(reason = "interval") {
           if (mapped) task.columnId = mapped.id;
           task.location = "board";
           taskActivity(task, "jira", `Jira status changed → ${status} (restored from ${prevLocation})`);
+        } else if (mapped && task.location === "board" && task.columnId !== mapped.id) {
+          // Self-heal (task 4b60ea0b): the remote status is unchanged, but the
+          // task's columnId doesn't match the column now mapped to that
+          // status. This happens when a task was imported/synced before its
+          // status had a column mapping (e.g. a non-English Jira status with
+          // no matching column yet) — it landed in the fallback column and,
+          // since its status never changed afterwards, was never corrected.
+          // Once the mapping exists (via "Fetch from Jira" / manual column
+          // edit), re-home it into the now-correct column on the next sync,
+          // without touching jiraStatus or pushing anything to Jira.
+          const prevColumn = board.columns.find((c) => c.id === task.columnId);
+          task.columnId = mapped.id;
+          taskActivity(
+            task,
+            "jira",
+            `column corrected: ${prevColumn?.name ?? task.columnId ?? "?"} → ${mapped.name} (mapping for "${status}" was missing/fallback at import time)`
+          );
         }
       }
       importJiraComments(task, f.comment);
