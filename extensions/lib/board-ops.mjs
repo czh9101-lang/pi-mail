@@ -26,6 +26,7 @@ import {
   agentGroup,
   taskGroup,
   canAccessGroup,
+  managerAgentTest,
   taskLocationLabel,
   taskMailBody,
   notifyAssignee,
@@ -158,9 +159,10 @@ export async function boardAssign(actorId, taskSpec, assignee, newSession) {
   }
   // Resolve to a canonical live-agent name when possible (accepts id prefixes).
   const targetId = resolveTarget(name);
-  // An agent can only assign within its own group; the human can assign across.
+  // An agent can only assign within its own group; the human and managers can assign across.
   const newGroup = targetId ? agentGroup(targetId) : null;
-  if (actorId !== HUMAN_AGENT_ID && newGroup != null && newGroup !== agentGroup(actorId)) {
+  const isManager = actorId !== HUMAN_AGENT_ID && managerAgentTest && managerAgentTest(actorId);
+  if (actorId !== HUMAN_AGENT_ID && !isManager && newGroup != null && newGroup !== agentGroup(actorId)) {
     return { error: `Cannot assign to ${name}: ${name} is in a different project group` };
   }
   const prevAssignee = task.assignee;
