@@ -9,7 +9,8 @@ import { EventEmitter } from "node:events";
 export const sseEvents = new EventEmitter();
 sseEvents.setMaxListeners(100); // one per SSE client
 
-/** Convenience: emit a simple event with an optional detail. */
+/** Convenience: emit a simple event with an optional detail.
+ *  Never throws — SSE is purely cosmetic; core ops must not fail. */
 export function notifySSE(type, detail) {
-  sseEvents.emit("event", { type, detail });
+  try { sseEvents.emit("event", { type, detail }); } catch { /* best-effort */ }
 }
