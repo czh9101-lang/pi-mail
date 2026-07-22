@@ -27,7 +27,8 @@ function renderTaskModal() {
   let m = $("#task-modal");
   if (!boardUi.taskModalId) { if (m) m.remove(); return; }
   const board = state.board;
-  const t = (board?.tasks ?? []).find(x => x.id === boardUi.taskModalId);
+  const t = (board?.tasks ?? []).find(x => x.id === boardUi.taskModalId)
+         || (boardUi.archiveTasks ?? []).find(x => x.id === boardUi.taskModalId);
   if (!t) { closeTaskModal(); return; } // task disappeared (moved off board / deleted)
   if (!m) {
     m = el("div", "task-modal"); m.id = "task-modal";

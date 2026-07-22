@@ -94,11 +94,13 @@ export function renderBoard(b: BoardState, filters: BoardListFilters = {}): stri
 /** Render a single task in full (board_get_task). */
 export function renderTask(t: BoardTask, b: BoardState): string {
   const col = (b.columns ?? []).find((c) => c.id === t.columnId);
+  const loc = t.location ?? "board";
+  const locLabel = loc === "backlog" ? "Backlog" : loc === "archive" ? "Archive" : (col?.name ?? t.columnId ?? "?");
+  const locNote = loc === "board" ? (col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)") : " (off-board)";
   const lines: string[] = [
     `Task:     ${t.key ? `[${t.key}] ` : ""}${t.summary}`,
     `Id:       ${t.id}`,
-    `Column:   ${col?.name ?? t.columnId}${col?.jiraStatus ? ` (jira: ${col.jiraStatus})` : " (board-only)"}`,
-    `Location: ${t.location ?? "board"}${t.level ? ` | Level: ${t.level}` : ""}${t.epicId ? ` | Epic: ${t.epicId.slice(0, 8)}` : ""}`,
+    `Location: ${locLabel}${locNote}${t.level ? ` | Level: ${t.level}` : ""}${t.epicId ? ` | Epic: ${t.epicId.slice(0, 8)}` : ""}`,
     `Assignee: ${t.assignee ?? "—"}`,
     `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
     ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),

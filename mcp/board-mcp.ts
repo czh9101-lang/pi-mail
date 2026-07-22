@@ -28,7 +28,7 @@ import { findTask, renderBoard, renderOpResult, renderTask } from "./format.js";
  *  already list cross-group with group:'all', and get-by-id should be at least
  *  as permissive). */
 async function loadTask(backend: BoardBackend, taskId: string) {
-  const b = await backend.getBoard({ group: "all" });
+  const b = await backend.getBoard({ group: "all", includeArchived: true });
   const t = findTask(b, taskId);
   return { b, t };
 }
