@@ -140,18 +140,28 @@ function renderBoard() {
   if (boardUi.newTask.backlog) colPick.disabled = true;
   const blLbl = el("label", null, "backlog"); blLbl.setAttribute("for", "nbl"); blLbl.style.margin = "0";
   blWrap.appendChild(blCb); blWrap.appendChild(blLbl);
+  // Group picker — populated from connected agent project groups
+  const grpPick = el("select", "agentpick");
+  grpPick.title = "Project group";
+  grpPick.appendChild((() => { const o = el("option"); o.value = ""; o.textContent = "(no group)"; return o; })());
+  const seenGroups = new Set();
+  for (const a of (state.agents || [])) {
+    const g = projectOf(a.cwd);
+    if (!seenGroups.has(g) && g !== "(no project)") { seenGroups.add(g); const o = el("option"); o.value = g; o.textContent = g; grpPick.appendChild(o); }
+  }
   const addBtn = el("button", "btn", "Add task");
   addBtn.addEventListener("click", async () => {
     const summary = boardUi.newTask.summary.trim();
     if (!summary) { toast("Give the task a summary", true); return; }
     const payload = { summary, level: boardUi.newTask.level, backlog: boardUi.newTask.backlog };
     if (!boardUi.newTask.backlog) payload.column = colPick.value;
+    if (grpPick.value) payload.group = grpPick.value;
     const desc = boardUi.newTask.description.trim();
     if (desc) payload.description = desc;
     const r = await boardPost("/api/board/create", payload, "Task created");
     if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; inSum.value = ""; inDesc.value = ""; }
   });
-  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
+  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(grpPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
 
   // Kanban columns

@@ -32,7 +32,7 @@ import {
  * the parent is a Jira issue (or `inJira` is set), a real Jira issue is
  * created too and kept in sync (pinned, so it survives JQL filtering).
  */
-export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog } = {}) {
+export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog, group } = {}) {
   const s = String(summary ?? "").trim();
   if (!s) return { error: "Summary is required" };
   const parentTask = parent ? findBoardTask(parent) : null;
@@ -81,7 +81,7 @@ export async function boardCreate(actorId, { summary, description, column, paren
     // Stamp the owning group: subtasks inherit their parent's group, otherwise
     // the creator's project group (human-created tasks get null here and are
     // (re)stamped when assigned to an agent).
-    group: parentTask ? taskGroup(parentTask) : agentGroup(actorId),
+    group: group?.trim() || (parentTask ? taskGroup(parentTask) : agentGroup(actorId)),
     activity: [
       {
         ts: Date.now(),
