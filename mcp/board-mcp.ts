@@ -201,10 +201,11 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       level: z.string().optional().describe("Issue hierarchy: 'epic' | 'story' | 'task' | 'subtask' (local-only; defaults to 'task', or 'subtask' with a parent)"),
       epicId: z.string().optional().describe("Board id/prefix of the epic a story belongs to"),
       backlog: z.boolean().optional().describe("Create in the Backlog pool (off-board, local-only) instead of a column"),
+      group: z.string().optional().describe("Project group name for the task (omit for ungrouped/current behavior)"),
     },
-    async ({ summary, description, column, parent, inJira, level, epicId, backlog }) => {
+    async ({ summary, description, column, parent, inJira, level, epicId, backlog, group }) => {
       try {
-        const resp: BoardOpResponse = await http.createTask({ summary, description, column, parent, inJira, level, epicId, backlog });
+        const resp: BoardOpResponse = await http.createTask({ summary, description, column, parent, inJira, level, epicId, backlog, group });
         const id = (resp.taskId ?? resp.task?.id ?? "?").slice(0, 8);
         const key = resp.key ?? resp.task?.key;
         const jiraNote = key ? ` (Jira: ${key})` : "";
