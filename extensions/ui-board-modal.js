@@ -153,6 +153,32 @@ function renderTaskModal() {
   mv.title = "Move to column / backlog / archive";
   mv.addEventListener("change", () => boardPost("/api/board/move", { taskId: t.id, column: mv.value }, "Moved"));
   actions.appendChild(mv);
+  // Group picker
+  const gp = el("select");
+  gp.title = "Change project group";
+  const gpNone = el("option"); gpNone.value = "__clear__"; gpNone.textContent = "→ group…"; gp.appendChild(gpNone);
+  const curGroup = taskGroup(t);
+  const seen = new Set();
+  for (const a of (state.agents || [])) {
+    const g = projectOf(a.cwd);
+    if (!seen.has(g) && g !== "(no project)") {
+      seen.add(g);
+      const o = el("option"); o.value = g; o.textContent = g;
+      if (g === curGroup) o.selected = true;
+      gp.appendChild(o);
+    }
+  }
+  if (curGroup && curGroup !== "(no project)" && !seen.has(curGroup)) {
+    const o = el("option"); o.value = curGroup; o.textContent = curGroup; o.selected = true;
+    gp.appendChild(o);
+  }
+  const gpClear = el("option"); gpClear.value = ""; gpClear.textContent = "(no group)"; gp.appendChild(gpClear);
+  gp.addEventListener("change", () => {
+    if (!gp.value && gp.value !== "") return;
+    const group = gp.value === "__clear__" ? "" : gp.value;
+    boardPost("/api/board/update", { taskId: t.id, group }, "Group updated").then(r => { if (r.ok) closeTaskModal(); });
+  });
+  actions.appendChild(gp);
   // Assign select
   const as = el("select");
   const optNone = el("option"); optNone.value = ""; optNone.textContent = "→ assign…"; as.appendChild(optNone);
