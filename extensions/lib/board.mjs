@@ -215,6 +215,20 @@ export function loadBoard() {
         // group is left as-is when stamped; unset tasks derive it live from
         // their assignee (see taskGroup), so no backfill needed.
       }
+      // Auto-restore backlog tasks to the first board column on restart (task a8edd985).
+      // Ensures parked work is not forgotten across daemon cycles.
+      const firstCol = board.columns[0];
+      if (firstCol) {
+        let restored = 0;
+        for (const t of board.tasks) {
+          if (t.location === "backlog") {
+            t.location = "board";
+            t.columnId = firstCol.id;
+            restored++;
+          }
+        }
+        if (restored) log(`Auto-restored ${restored} backlog task(s) to ${firstCol.name}`);
+      }
     }
   } catch {
     // No board file yet — defaults apply.

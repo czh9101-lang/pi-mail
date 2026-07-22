@@ -266,10 +266,11 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       taskId: z.string().describe("Task id prefix or Jira key"),
       summary: z.string().optional().describe("New summary"),
       description: z.string().optional().describe("New description"),
+      group: z.string().optional().describe("Project group for the task (empty string to clear, omit to leave unchanged)"),
     },
-    async ({ taskId, summary, description }) => {
+    async ({ taskId, summary, description, group }) => {
       try {
-        const resp = await http.updateTask(taskId, { summary, description });
+        const resp = await http.updateTask(taskId, { summary, description, group });
         return ok(renderOpResult(resp, `Updated ${taskId}`));
       } catch (e) {
         return toolError(e);

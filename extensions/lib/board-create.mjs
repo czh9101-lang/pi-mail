@@ -125,7 +125,7 @@ export async function boardCreate(actorId, { summary, description, column, paren
   return { ok: true, task };
 }
 
-export async function boardUpdate(actorId, taskSpec, { summary, description } = {}) {
+export async function boardUpdate(actorId, taskSpec, { summary, description, group } = {}) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
   const actor = agentDisplayName(actorId);
@@ -138,7 +138,12 @@ export async function boardUpdate(actorId, taskSpec, { summary, description } = 
     task.description = description;
     changes.push("description");
   }
-  if (!changes.length) return { error: "Nothing to update (pass summary and/or description)" };
+  if (typeof group === "string") {
+    const g = group.trim();
+    task.group = g || null;
+    changes.push(g ? `group → ${g}` : "group (cleared)");
+  }
+  if (!changes.length) return { error: "Nothing to update (pass summary, description, and/or group)" };
   let warning;
   if (task.origin === "jira" && jiraPushOk()) {
     try {

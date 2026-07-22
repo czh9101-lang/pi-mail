@@ -273,12 +273,13 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
       taskId: Type.String({ description: "Task id prefix or Jira key" }),
       summary: Type.Optional(Type.String({ description: "New summary" })),
       description: Type.Optional(Type.String({ description: "New description" })),
+      group: Type.Optional(Type.String({ description: "Project group for the task (empty string to clear, omit to leave unchanged). Use favorites/mail_list_projects basenames as valid group names." })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
       try {
         const resp = await ctx.client.request<{ type: string; message?: string; task?: BoardTask }>(
-          { type: "board_update", taskId: params.taskId, summary: params.summary, description: params.description },
+          { type: "board_update", taskId: params.taskId, summary: params.summary, description: params.description, group: params.group },
           30_000
         );
         return boardOpResult(resp, `Updated ${resp.task?.key ?? params.taskId}`);
