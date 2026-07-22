@@ -60,6 +60,7 @@ export async function boardMove(actorId, taskSpec, columnSpec, note) {
     if (prevLoc !== target || note) {
       task.location = target;
       task.columnId = null;
+      if (target === "archive") task.archivedAt = Date.now();
       const label = target === "archive" ? "Archive" : "Backlog";
       const fromLabel = from ? `${from.name} → ` : prevLoc !== "board" ? `${prevLoc} → ` : "→ ";
       taskActivity(task, actor, `moved ${fromLabel}${label}${note ? ` — ${note}` : ""}`);

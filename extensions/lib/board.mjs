@@ -377,6 +377,18 @@ export function boardState(actorId, opts = {}) {
       return loc !== "archive" || showArchive;
     });
   }
+  // Sort archive tasks by archivedAt descending (task 8b3f4977).
+  // Only applies when viewing the archive pool; non-archive tasks keep
+  // their original (creation/column) order.
+  if (wantLoc === "archive") {
+    tasks = [...tasks].sort((a, b) => {
+      const aArch = a.location === "archive";
+      const bArch = b.location === "archive";
+      if (aArch !== bArch) return aArch ? -1 : 1; // archive tasks first
+      if (!aArch) return 0; // both non-archive: keep original order
+      return (b.archivedAt ?? 0) - (a.archivedAt ?? 0); // newest first
+    });
+  }
   // Jira-disable scrub (task 6e6e2ab2): the board runs board-only whenever
   // Jira is effectively off — either because the master switch is flipped
   // off (jiraEnabled:false) OR because no credentials are configured
