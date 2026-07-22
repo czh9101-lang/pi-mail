@@ -99,13 +99,17 @@ export function handleMessage(agentId, msg, socket) {
     }
 
     case "send": {
-      const r = sendMail(agentId, msg.to, msg.subject, msg.body, {
-        newSession: !!msg.newSession,
-      });
-      if (r.error) {
-        reply({ type: "error", message: r.error });
-      } else {
-        reply({ type: "sent", messageId: r.messageId });
+      try {
+        const r = sendMail(agentId, msg.to, msg.subject, msg.body, {
+          newSession: !!msg.newSession,
+        });
+        if (r.error) {
+          reply({ type: "error", message: r.error });
+        } else {
+          reply({ type: "sent", messageId: r.messageId });
+        }
+      } catch (e) {
+        reply({ type: "error", message: e?.message ?? "send failed" });
       }
       break;
     }
