@@ -50,6 +50,7 @@ import {
 import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
 import { attachTerminalUpgrade } from "./http-terminal.mjs";
+import { sseEvents } from "./sse-events.mjs";
 
 /** Static UI assets served from the extension dir. The filename for each
  *  route is the pathname without the leading slash (e.g. "/ui.css" ->
@@ -155,6 +156,30 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       }
       res.writeHead(200, { "Content-Type": UI_ASSET_TYPES[url.pathname] });
       res.end(body);
+      return;
+    }
+
+    // ── SSE push endpoint for reactive UI updates ──────────────────────
+    // Sends state-change notifications to the web UI so it can refresh
+    // without polling. Event types: board-update, mail-received, agents-changed.
+    if (req.method === "GET" && url.pathname === "/events") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.write(": keepalive\n\n");
+      const onEvent = (ev) => {
+        try { res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev.detail ?? {})}\n\n`); }
+        catch { /* client disconnected */ }
+      };
+      sseEvents.on("event", onEvent);
+      const keepalive = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* gone */ } }, 15000);
+      req.on("close", () => {
+        sseEvents.off("event", onEvent);
+        clearInterval(keepalive);
+      });
       return;
     }
 

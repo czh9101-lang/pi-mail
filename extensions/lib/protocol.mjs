@@ -38,6 +38,7 @@ import { mmTick, mmState, mmKickoff } from "./middle-manager.mjs";
 import { ceoTick, ceoState, ceoKickoff } from "./ceo.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
 import os from "node:os";
+import { notifySSE } from "./sse-events.mjs";
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ export function handleMessage(agentId, msg, socket) {
       });
       startHeartbeat(msg.agentId);
       reply({ type: "registered", agentId: msg.agentId });
+      notifySSE("agents-changed");
       log(`Registered: ${info.agentName} (${msg.agentId.slice(0, 8)})`);
       break;
     }
@@ -89,6 +91,7 @@ export function handleMessage(agentId, msg, socket) {
         clearInterval(agent.pingTimer);
         agents.delete(agentId);
         mailboxes.delete(agentId); // Clean exit clears mailbox
+        notifySSE("agents-changed");
         log(`Unregistered: ${agent.info.agentName}`);
       }
       reply({ type: "ok" });
@@ -178,6 +181,7 @@ export function handleMessage(agentId, msg, socket) {
           clearInterval(a.pingTimer);
           a.conn.destroy();
           agents.delete(id);
+          notifySSE("agents-changed");
           // Preserve mailbox so reconnected agent can reclaim messages
           pruned.push({ agentId: id, agentName: a.info.agentName });
           log(`Pruned silent agent: ${a.info.agentName} (${id.slice(0, 8)}) — silent for ${Math.round((Date.now() - a.lastSeen) / 1000)}s`);

@@ -372,4 +372,16 @@ window.addEventListener("hashchange", () => { if (applyRouteFromHash()) render()
 // you on the page you were on (instead of always landing on Agents).
 applyRouteFromHash();
 refresh();
+// SSE push: listen for state-change events from the daemon so the UI
+// refreshes immediately instead of waiting for the 3s poll.
+(() => {
+  try {
+    const es = new EventSource("/events");
+    const onEvent = () => { try { refresh(); } catch {} };
+    es.addEventListener("board-update", onEvent);
+    es.addEventListener("mail-received", onEvent);
+    es.addEventListener("agents-changed", onEvent);
+    es.addEventListener("error", () => { /* SSE reconnect is built-in */ });
+  } catch { /* SSE not supported — 3s poll fallback is fine */ }
+})();
 pollTimer = setInterval(refresh, 3000);

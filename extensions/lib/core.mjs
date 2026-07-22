@@ -235,6 +235,7 @@ export function sendMail(fromId, toSpec, subject, body, opts = {}) {
   if (!targetId) return { error: `Agent '${toSpec}' not found` };
   const mail = makeMail(fromId, subject, body, opts.newSession ? { newSession: true } : {});
   deliverMail(targetId, mail);
+  notifySSE("mail-received");
   return { messageId: mail.id };
 }
 

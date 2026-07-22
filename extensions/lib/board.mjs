@@ -14,6 +14,7 @@ import {
   sendMail,
   resolveTarget,
 } from "./core.mjs";
+import { notifySSE } from "./sse-events.mjs";
 
 // ── Task board + Jira sync ───────────────────────────────────────────────────
 //
@@ -172,6 +173,8 @@ export function schedulePersistBoard() {
     boardPersistTimer = null;
     flushBoard();
   }, 300);
+  // Notify SSE clients so the web UI auto-refreshes
+  notifySSE("board-update");
 }
 export function flushBoard() {
   try {
