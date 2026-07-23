@@ -82,6 +82,7 @@ const inProcessBoardBackend = {
         ceoIntervalMin: board.config.ceoIntervalMin ?? 120,
         ceoModel: board.config.ceoModel ?? "",
         ceoMaxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
+        ceoAllowedHosts: board.config.ceoAllowedHosts ?? [],
         chatIdleMin: board.config.chatIdleMin ?? 60,
       },
       columns: board.columns,
