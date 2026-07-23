@@ -153,20 +153,31 @@ function renderTaskModal() {
   mv.title = "Move to column / backlog / archive";
   mv.addEventListener("change", () => boardPost("/api/board/move", { taskId: t.id, column: mv.value }, "Moved"));
   actions.appendChild(mv);
-  // Group picker
+  // Group picker — groups from running agents + favorites + spawn history.
   const gp = el("select");
   gp.title = "Change project group";
   const gpNone = el("option"); gpNone.value = "__clear__"; gpNone.textContent = "→ group…"; gp.appendChild(gpNone);
   const curGroup = taskGroup(t);
   const seen = new Set();
+  // Running agents
   for (const a of (state.agents || [])) {
     const g = projectOf(a.cwd);
-    if (!seen.has(g) && g !== "(no project)") {
-      seen.add(g);
-      const o = el("option"); o.value = g; o.textContent = g;
-      if (g === curGroup) o.selected = true;
-      gp.appendChild(o);
-    }
+    addGroupOpt(g);
+  }
+  // Favorites (persist across agent sessions)
+  for (const f of (state.spawn?.projects?.favorites || [])) {
+    addGroupOpt(projectOf(f.cwd));
+  }
+  // Spawn history (projects that were spawned into before)
+  for (const h of (state.spawn?.projects?.history || [])) {
+    addGroupOpt(projectOf(h.cwd));
+  }
+  function addGroupOpt(g) {
+    if (!g || seen.has(g) || g === "(no project)") return;
+    seen.add(g);
+    const o = el("option"); o.value = g; o.textContent = g;
+    if (g === curGroup) o.selected = true;
+    gp.appendChild(o);
   }
   if (curGroup && curGroup !== "(no project)" && !seen.has(curGroup)) {
     const o = el("option"); o.value = curGroup; o.textContent = curGroup; o.selected = true;
