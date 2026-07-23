@@ -206,6 +206,7 @@ export function boardSetConfig({ config, columns } = {}) {
       board.config.ceoMaxLifetimeMin = Math.max(1, Math.floor(config.ceoMaxLifetimeMin));
     }
     if (typeof config.ceoModel === "string") board.config.ceoModel = config.ceoModel.trim();
+    if (Array.isArray(config.ceoAllowedHosts)) board.config.ceoAllowedHosts = config.ceoAllowedHosts.map((s) => String(s).trim()).filter(Boolean);
     // MCP project chat idle kill bound (per-board). A chat worker with no
     // communication for this many minutes is killed by the chat idle reaper
     // (lib/chat.mjs). Default 60 (one hour).

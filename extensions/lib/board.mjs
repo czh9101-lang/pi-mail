@@ -146,6 +146,10 @@ export let board = {
     ceoEnabled: false,
     ceoIntervalMin: 120,
     ceoModel: "",
+    // Hostname allow-list for CEO spawning. When non-empty, the CEO tick only
+    // spawns on hosts whose hostname matches at least one glob pattern (e.g.
+    // ["server-*"]). Empty (default) means allow all hosts — backward compatible.
+    ceoAllowedHosts: [],
     // The CEO is a ~15-minute management thread (operator invariant 7/9). This
     // is the hard safety bound: a CEO that does not self-exit within 15 min is
     // force-killed by the reaper. See lib/ceo.mjs + README ephemerality.
@@ -202,6 +206,7 @@ export function loadBoard() {
       }
       if (typeof saved.config?.mmModel === "string") board.config.mmModel = saved.config.mmModel;
       if (typeof saved.config?.ceoModel === "string") board.config.ceoModel = saved.config.ceoModel;
+      if (Array.isArray(saved.config?.ceoAllowedHosts)) board.config.ceoAllowedHosts = saved.config.ceoAllowedHosts;
       if (Array.isArray(saved.columns) && saved.columns.length > 0) board.columns = saved.columns;
       if (Array.isArray(saved.tasks)) board.tasks = saved.tasks;
       if (typeof saved.lastSync === "number") board.lastSync = saved.lastSync;

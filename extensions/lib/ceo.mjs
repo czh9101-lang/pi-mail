@@ -40,6 +40,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import crypto from "node:crypto";
 import {
   HUMAN_AGENT_ID,
@@ -191,6 +192,23 @@ function ceoKickoff(favorites) {
   ].join("\n");
 }
 
+/** Simple glob match: * matches any sequence, ? matches one char. */
+function globMatch(pattern, str) {
+  const re = new RegExp(
+    "^" + String(pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
+  );
+  return re.test(String(str));
+}
+
+/** Whether the current host is allowed to spawn CEOs based on ceoAllowedHosts.
+ *  Empty list = allow all hosts (backward compatible). */
+function hostnameAllowed() {
+  const allowed = board.config.ceoAllowedHosts;
+  if (!Array.isArray(allowed) || allowed.length === 0) return true;
+  const host = os.hostname();
+  return allowed.some((p) => globMatch(p, host));
+}
+
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 /** Are there ANY tasks on the board (in a column, not Backlog/Archive)
@@ -271,6 +289,9 @@ function ceoTick(now = Date.now(), force = false) {
   // tracked gets cleaned up if it exits or overstays.
   reapCeos(now);
   if (board.config.ceoEnabled !== true) return { reaped: true, spawned: false };
+  if (!hostnameAllowed()) {
+    return { reaped: true, spawned: false, reason: `hostname "${os.hostname()}" not in ceoAllowedHosts` };
+  }
   const favorites = spawnRegistry.projects.favorites ?? [];
   // The CEO oversees ALL board groups: the favorites baseline (always-managed)
   // PLUS every other group with on-board tasks. So a cycle runs when either is
@@ -300,6 +321,7 @@ function ceoState() {
     intervalMin: board.config.ceoIntervalMin ?? 120,
     model: board.config.ceoModel ?? "",
     maxLifetimeMin: board.config.ceoMaxLifetimeMin ?? 15,
+    allowedHosts: board.config.ceoAllowedHosts ?? [],
     lastSpawnTs: ceoMeta().lastSpawnTs ?? 0,
     managedProjects: (spawnRegistry.projects.favorites ?? []).slice(),
     allGroups: true,
