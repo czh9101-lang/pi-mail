@@ -156,6 +156,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
       level: Type.Optional(Type.String({ description: "Issue level: 'epic' | 'story' | 'task' | 'subtask' (default inferred from parent)" })),
       epicId: Type.Optional(Type.String({ description: "For a story: the board id (or prefix) of its epic" })),
       backlog: Type.Optional(Type.Boolean({ description: "Create in the Backlog pool (off-board, local-only) instead of a column" })),
+      group: Type.Optional(Type.String({ description: "Project group for the task (omit for ungrouped/current behavior)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
@@ -171,6 +172,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
             level: params.level,
             epicId: params.epicId,
             backlog: params.backlog,
+            group: params.group,
           },
           30_000
         );

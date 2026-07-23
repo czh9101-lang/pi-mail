@@ -240,6 +240,7 @@ export function handleMessage(agentId, msg, socket) {
         level: msg.level,
         epicId: msg.epicId,
         backlog: !!msg.backlog,
+        group: msg.group,
       })
         .then((r) => reply(r.error ? { type: "error", message: r.error } : { type: "ok", task: r.task }))
         .catch((e) => reply({ type: "error", message: e?.message ?? String(e) }));
