@@ -145,7 +145,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
       "(or inJira is true) a real Jira issue is created and kept in sync. Otherwise the task is board-only. " +
       "Pass backlog:true to create straight into the Backlog pool (off-board, local-only). " +
       "Use level to set the issue hierarchy: 'epic' | 'story' | 'task' | 'subtask' (default 'task', or 'subtask' when parent is given). " +
-      "A story may reference an epic by id via epicId.",
+      "A story may reference an epic by id via epicId. Set group to assign the task to a project group (omit for ungrouped).",
     promptSnippet: "Create a task on the shared board",
     parameters: Type.Object({
       summary: Type.String({ description: "One-line task summary" }),
