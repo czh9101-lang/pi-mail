@@ -215,7 +215,7 @@ function mmKickoff(favorites) {
     "1. Run mail_list_agents to see who is currently connected.",
     `2. Run board_list_tasks (you have all-groups visibility) to see every project's tasks. Focus only on tasks whose group matches one of the managed projects listed above. Note every column these projects have tasks in — you will iterate all of them.`,
     "3. Iterate EVERY column in order, and for EACH task make a decision:",
-    "   - Refine: if vague/unclear, refine it (board_update_task to clarify goal/scope/acceptance) and move to To Do; if clear, move to To Do. Don't leave it parked unless only the human can clarify.",
+    "   - Refine: if vague/unclear, refine it (board_update_task to clarify goal/scope/acceptance) and move to To Do; if clear, move to To Do. Also fix the task's group if it's in the wrong project (board_update_task group param) — a mismatched group blocks assignment. Don't leave it parked unless only the human can clarify.",
     "   - To Do: it's actionable — assign it to a live same-group worker (board_assign_task); if no live worker exists, spawn one (mail_spawn_agent) then assign. Don't leave actionable work unassigned.",
     "   - In Progress: board_get_task + check assignee liveness (from mail_list_agents):",
     "     - Stuck / idle worker: mail them a nudge (mail_send) or post a board comment.",
