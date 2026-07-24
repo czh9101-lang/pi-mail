@@ -58,7 +58,7 @@ const CHAT_REAP_TICK_MS = parseInt(process.env.PI_MAIL_CHAT_TICK_MS || "60000", 
 /** Default idle kill timeout (minutes) when board.config.chatIdleMin is unset. */
 const DEFAULT_CHAT_IDLE_MIN = 60;
 /** Default per-request wait timeout for chat_get / chat_post(wait=true), in ms. */
-const DEFAULT_WAIT_MS = parseInt(process.env.PI_MAIL_CHAT_WAIT_MS || "120000", 10);
+const DEFAULT_WAIT_MS = parseInt(process.env.PI_MAIL_CHAT_WAIT_MS || "300000", 10);
 /** How long to wait for a freshly-spawned chat worker to register. */
 const CHAT_REGISTER_TIMEOUT_MS = parseInt(process.env.PI_MAIL_CHAT_REGISTER_TIMEOUT || "30000", 10);
 
@@ -357,6 +357,15 @@ function firstTurnBody(threadId, cwd, message) {
   return [
     "You are a chat worker for the project at " + cwd + ".",
     "An MCP client is asking you questions about this project; your replies go back to the client over pi-mail.",
+    "",
+    "## For broad/exploratory questions (e.g. architectural overview):",
+    "- Start with a focused read of key files (package.json, README, main entry point, top-level dir listing).",
+    "- Build your answer from what you find in those key files — do NOT scan the entire repo.",
+    "- If the answer would require reading many files, reply with what you've found so far rather than trying to read everything.",
+    "- The MCP client can ask follow-up questions for deeper detail.",
+    "",
+    "## For narrow/specific questions:",
+    "- Read only the relevant files and answer directly.",
     "",
     "When you have an answer, reply via `mail_send` to \"human\" with subject \"chat:" + threadId + "\" and your answer in the body. Keep replies focused and concise. Do NOT use ask_user_question — the client is not at a TUI; it only sees your mailed reply.",
     "",
