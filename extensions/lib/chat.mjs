@@ -68,9 +68,11 @@ const CHAT_MARKER = (threadId) => `chat:${threadId}`;
 // ── Thread registry ──────────────────────────────────────────────────────────
 
 /**
- * @type {Map<string, { threadId: string, agentName: string, agentId: string, cwd: string, createdAt: number, lastActivity: number }>}
+ * @type {Map<string, { threadId: string, agentName: string, agentId: string, cwd: string, createdAt: number, lastActivity: number, pendingSpawn?: boolean }>}
  * In-memory only (chat threads are ephemeral). An agent whose tmux session has
  * died is re-spawned lazily on the next chat_post to its threadId.
+ * `pendingSpawn`: true while an async spawn is in flight (wait:false path);
+ * the reaper skips these threads so they aren't killed before the agent registers.
  */
 const threads = new Map();
 
@@ -243,7 +245,8 @@ export async function chatPost({ cwd, message, threadId, wait = true, timeoutMs 
     if (!thread) return { error: `unknown thread: ${threadId}` };
   } else {
     threadId = crypto.randomUUID();
-    thread = { threadId, agentName: "", agentId: "", cwd, createdAt: Date.now(), lastActivity: Date.now() };
+    const name = chatSessionName(threadId, cwd);
+    thread = { threadId, agentName: name, agentId: "", cwd, createdAt: Date.now(), lastActivity: Date.now() };
     threads.set(threadId, thread);
     isNew = true;
   }
@@ -253,17 +256,23 @@ export async function chatPost({ cwd, message, threadId, wait = true, timeoutMs 
   // best-effort delivery asynchronously and return the threadId immediately so
   // the MCP client can fetch the answer later with chat_get.
   if (!wait) {
-    // The thread + agentName are set synchronously, so chat_state can reveal
-    // the agent name right away. Delivery happens once the agent registers.
+    // The thread + agentName are set synchronously, so chat_get can find it.
+    // pendingSpawn flag prevents the idle reaper from killing the thread
+    // before the agent registers (async spawn in flight).
+    thread.pendingSpawn = true;
     ensureThreadAgent(thread)
       .then((up) => {
+        thread.pendingSpawn = false;
         if (up.error) return;
         const subject = `${CHAT_MARKER(threadId)} question`;
         const body = isNew ? firstTurnBody(threadId, cwd, message) : continuationBody(threadId, message);
         sendMail(HUMAN_AGENT_ID, thread.agentName, subject, body, { newSession: isNew });
         thread.lastActivity = Date.now();
       })
-      .catch((e) => log(`chat_post async delivery error: ${e?.message ?? String(e)}`));
+      .catch((e) => {
+        thread.pendingSpawn = false;
+        log(`chat_post async delivery error: ${e?.message ?? String(e)}`);
+      });
     return { threadId };
   }
 
@@ -374,6 +383,8 @@ let reapTimer = null;
 function reapIdleChat(now = Date.now()) {
   const idleMs = Math.max(1, (board.config.chatIdleMin ?? DEFAULT_CHAT_IDLE_MIN)) * 60_000;
   for (const [threadId, t] of [...threads]) {
+    // Skip threads waiting for async agent spawn (wait:false path).
+    if (t.pendingSpawn) continue;
     const alive = threadAgentAlive(t);
     const idleFor = now - (t.lastActivity ?? now);
     if (!alive) {
