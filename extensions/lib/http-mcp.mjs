@@ -33,6 +33,7 @@ import {
   boardSetConfig,
 } from "./board-ops.mjs";
 import { syncBoard } from "./jira.mjs";
+import { messagePage } from "./core.mjs";
 import { chatPost, chatGet } from "./chat.mjs";
 
 const HUMAN_AGENT_ID = "00000000-0000-0000-0000-000000000000";
@@ -138,6 +139,9 @@ const inProcessBoardBackend = {
   async chatGet(body) {
     const r = await chatGet({ threadId: body.threadId, timeoutMs: body.timeoutMs });
     return r.error ? { ok: false, error: r.error } : { ok: true, ...r };
+  },
+  listMessages(opts) {
+    return messagePage(opts);
   },
 };
 

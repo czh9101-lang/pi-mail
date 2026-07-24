@@ -413,5 +413,89 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
     },
   );
 
+  // ── list_mail ─────────────────────────────────────────────────────────────
+  server.tool(
+    "list_mail",
+    "List mail messages with pagination (newest-first). Use cursor for the next page; limit max 200. Filter by archived status (include|exclude|only), sender (from), recipient (to), or conversation partner (involves).",
+    {
+      limit: z.number().optional().describe("Page size (default 50, max 200)"),
+      cursor: z.string().optional().describe("Opaque cursor from a previous list_mail response for the next page"),
+      archived: z.string().optional().describe("Filter: 'include' (default), 'exclude' (inbox only), or 'only' (archived only)"),
+      to: z.string().optional().describe("Filter by recipient agent name or id"),
+      from: z.string().optional().describe("Filter by sender agent name or id"),
+      involves: z.string().optional().describe("Filter: messages involving this agent (as sender or recipient)"),
+    },
+    async ({ limit, cursor, archived, to, from, involves }) => {
+      try {
+        const r = await (http as any).listMessages({ limit, cursor, archived, to, from, involves });
+        if (r.error) return ok(`❌ ${r.error}`);
+        if (!r.messages) return ok("No messages found.");
+        const lines = [`📬 ${r.messages.length} message(s) · total: ${r.total ?? "?"}${r.hasMore ? " · more available" : ""}`];
+        for (const m of r.messages) {
+          const date = new Date(m.timestamp).toLocaleString();
+          const dir = m.fromId === "00000000-0000-0000-0000-000000000000" ? "📤 sent" : "📥 received";
+          lines.push(`${dir}  ${date}  ${m.fromName || m.fromId?.slice(0, 8)} → ${m.toName || m.toId?.slice(0, 8)}  [${m.id?.slice(0, 8)}]`);
+          if (m.subject) lines.push(`   subject: ${m.subject}`);
+        }
+        if (r.nextCursor) lines.push(`\n→ next cursor: ${r.nextCursor}`);
+        return ok(lines.join("\n"));
+      } catch (e) { return toolError(e); }
+    },
+  );
+
+  // ── read_mail ──────────────────────────────────────────────────────────────
+  server.tool(
+    "read_mail",
+    "Read a single mail message in full by its ID (first 8 chars are enough). Returns the full message body and metadata.",
+    {
+      message_id: z.string().describe("Message ID or prefix (from list_mail output)"),
+    },
+    async ({ message_id }) => {
+      try {
+        const r = await (http as any).listMessages({ limit: 200, archived: "include" });
+        if (r.error) return ok(`❌ ${r.error}`);
+        const msg = (r.messages || []).find((m: any) => m.id?.startsWith(message_id));
+        if (!msg) return ok(`Message not found: ${message_id}. Try list_mail first.`);
+        const date = new Date(msg.timestamp).toLocaleString();
+        const lines = [
+          `📧 Message ${msg.id}`,
+          `From: ${msg.fromName || msg.fromId}`,
+          `To: ${msg.toName || msg.toId}`,
+          `Date: ${date}`,
+          `Subject: ${msg.subject || "(no subject)"}`,
+          `Archived: ${msg.archived ? "yes" : "no"}`,
+          "",
+          msg.body || "(empty body)",
+        ];
+        return ok(lines.join("\n"));
+      } catch (e) { return toolError(e); }
+    },
+  );
+
+  // ── search_mail ────────────────────────────────────────────────────────────
+  server.tool(
+    "search_mail",
+    "Search mail messages by keyword in subject and body. Returns matching messages newest-first (up to 50).",
+    {
+      query: z.string().describe("Search keyword — case-insensitive match against subject and body"),
+    },
+    async ({ query }) => {
+      try {
+        const q = String(query ?? "").toLowerCase();
+        if (!q) return ok("❌ query is required");
+        const r = await (http as any).listMessages({ limit: 200, archived: "include" });
+        if (r.error) return ok(`❌ ${r.error}`);
+        const matches = (r.messages || []).filter((m: any) => (m.subject || "").toLowerCase().includes(q) || (m.body || "").toLowerCase().includes(q));
+        if (!matches.length) return ok(`No messages matching "${query}".`);
+        const lines = [`🔍 ${matches.length} match(es) for "${query}":`];
+        for (const m of matches.slice(0, 50)) {
+          const date = new Date(m.timestamp).toLocaleString();
+          lines.push(`[${m.id?.slice(0, 8)}] ${date}  ${m.fromName || m.fromId?.slice(0, 8)} → ${m.toName || m.toId?.slice(0, 8)}  ${m.subject || "(no subject)"}`);
+        }
+        return ok(lines.join("\n"));
+      } catch (e) { return toolError(e); }
+    },
+  );
+
   return server;
 }

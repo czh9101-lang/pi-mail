@@ -110,6 +110,23 @@ export async function chatGet(body: ChatGetBody): Promise<ChatResult> {
   return request<ChatResult>("POST", "/api/chat/get", body);
 }
 
+// ── Mail ─────────────────────────────────────────────────────────────────────
+/** GET /api/messages — paginated message history with filters. */
+export async function listMessages(opts?: {
+  limit?: number; cursor?: string; archived?: string;
+  to?: string; from?: string; involves?: string;
+}): Promise<{ messages: any[]; nextCursor: string | null; hasMore: boolean; total: number }> {
+  const qs = new URLSearchParams();
+  if (opts?.limit) qs.set("limit", String(opts.limit));
+  if (opts?.cursor) qs.set("cursor", opts.cursor);
+  if (opts?.archived) qs.set("archived", opts.archived);
+  if (opts?.to) qs.set("to", opts.to);
+  if (opts?.from) qs.set("from", opts.from);
+  if (opts?.involves) qs.set("involves", opts.involves);
+  const path = qs.toString() ? `/api/messages?${qs}` : "/api/messages";
+  return request("GET", path);
+}
+
 /** Default backend: a thin HTTP client over the daemon's `/api/board*` endpoints. */
 export const httpBackend: BoardBackend = {
   getBoard,
@@ -125,7 +142,8 @@ export const httpBackend: BoardBackend = {
   flagTask,
   chatPost,
   chatGet,
-};
+  listMessages,
+} as BoardBackend;
 
 // ── internals ─────────────────────────────────────────────────────────────────
 
