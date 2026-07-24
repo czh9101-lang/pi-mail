@@ -399,6 +399,17 @@ export function boardState(actorId, opts = {}) {
       return loc !== "archive" || showArchive;
     });
   }
+  // Search filter (task 8f99ad0f): case-insensitive substring match against
+  // summary, description, and task ID prefix. Intended for searching large
+  // archive pools without pulling everything into context.
+  if (opts.search) {
+    const q = String(opts.search).toLowerCase();
+    tasks = tasks.filter((t) =>
+      t.summary.toLowerCase().includes(q) ||
+      t.description.toLowerCase().includes(q) ||
+      t.id.startsWith(q)
+    );
+  }
   // Sort archive tasks by archivedAt descending (task 8b3f4977).
   // Only applies when viewing the archive pool; non-archive tasks keep
   // their original (creation/column) order.

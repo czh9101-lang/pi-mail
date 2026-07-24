@@ -260,7 +260,8 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       const location = url.searchParams.get("location") || undefined;
       const incArch = url.searchParams.get("includeArchived");
       const group = url.searchParams.get("group") || undefined;
-      const opts = { location, group, ...(incArch !== null ? { includeArchived: incArch === "true" } : {}) };
+      const search = url.searchParams.get("search") || undefined;
+      const opts = { location, group, search, ...(incArch !== null ? { includeArchived: incArch === "true" } : {}) };
       // Drop undefined keys so the default (no filter) path stays clean.
       const clean = Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined));
       json(res, 200, boardState(HUMAN_AGENT_ID, clean));

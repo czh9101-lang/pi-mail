@@ -80,13 +80,14 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       level: z.string().optional().describe("Filter to a level: 'epic' | 'story' | 'task' | 'subtask'"),
       includeArchived: z.boolean().optional().describe("Include archived tasks (location='archive') in the listing"),
       group: z.string().optional().describe("Scope by project group: 'all' = every project's tasks (cross-group), or a specific group name. Omit for the default scoping."),
+      search: z.string().optional().describe("Search query — case-insensitive match against summary, description, and task ID prefix. Use with location:'archive' to search archived tasks."),
     },
-    async ({ mine, location, level, includeArchived, group }) => {
+    async ({ mine, location, level, includeArchived, group, search }) => {
       try {
         // Delegate location/archive + group filtering to the daemon's boardState
         // (task 6586b9ca / b59e930a) — single source of truth. Default (no params)
         // hides the archive; backlog + board columns are shown.
-        const b = await http.getBoard({ location, includeArchived: includeArchived ?? false, group });
+        const b = await http.getBoard({ location, includeArchived: includeArchived ?? false, group, search });
         return ok(renderBoard(b, { mineAssignee: mine ? "human" : null, location, level, includeArchived, group }));
       } catch (e) {
         return toolError(e);

@@ -23,7 +23,8 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
       "List all tasks on the shared kanban task board, grouped by column, plus the Backlog and Archive pools. " +
       "Shows task id, Jira key, summary, assignee and Jira status. Use 'mine: true' to only see tasks assigned to you. " +
       "By default archived tasks are hidden; pass includeArchived: true to see them. Pass location to filter to 'board'|'backlog'|'archive'. " +
-      "Pass group to scope the listing: group:'all' shows every project's tasks (cross-group), group:'<name>' shows one project's tasks; omit for your own group (the default for workers).",
+      "Pass group to scope the listing: group:'all' shows every project's tasks (cross-group), group:'<name>' shows one project's tasks; omit for your own group (the default for workers). " +
+      "Pass search to filter by case-insensitive substring match against summary, description, and task ID prefix (use with location:'archive' to search archived tasks).",
     promptSnippet: "List tasks on the shared task board",
     promptGuidelines: [
       "Use board_list_tasks to see sprint/board work, e.g. when asked what to work on or to check task state.",
@@ -36,6 +37,7 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
       level: Type.Optional(Type.String({ description: "Filter to a level: 'epic' | 'story' | 'task' | 'subtask'" })),
       includeArchived: Type.Optional(Type.Boolean({ description: "Include archived tasks (location='archive') in the listing" })),
       group: Type.Optional(Type.String({ description: "Scope by project group: 'all' = every project's tasks (cross-group), or a specific group name. Omit for your own group (default for workers)." })),
+      search: Type.Optional(Type.String({ description: "Search query — case-insensitive match against summary, description, and task ID prefix. Use with location:'archive' to search archived tasks." })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       try {
@@ -43,7 +45,7 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
         // (task 6586b9ca / b59e930a) — single source of truth. Default (no params)
         // hides the archive (includeArchived defaults to false); backlog + board
         // columns are shown. `mine`/`level` stay here (presentation/agent-specific).
-        const b = await fetchBoard(ctx, { location: params.location, includeArchived: params.includeArchived ?? false, group: params.group });
+        const b = await fetchBoard(ctx, { location: params.location, includeArchived: params.includeArchived ?? false, group: params.group, search: params.search });
         let tasks = b.tasks ?? [];
         if (params.mine) tasks = tasks.filter((t) => t.assignee === ctx.agentName);
         if (params.level) tasks = tasks.filter((t) => (t.level ?? "task") === params.level);
