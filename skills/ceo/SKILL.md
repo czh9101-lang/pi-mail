@@ -27,7 +27,7 @@ baseline PLUS every other group that has tasks on the board.
 You do **not** do task-level work. Specifically you do **not**:
 - move tasks between columns (no `board_move_task`),
 - unblock/reassign workers on individual tasks,
-- archive finished tasks,
+- finish/close tasks (no `board_move_task`),
 - comment on or flag individual tasks,
 - implement anything.
 
@@ -98,7 +98,7 @@ baseline.
    Signals that it does:
    - stuck / idle workers (connected, silent on an in-progress task),
    - flagged-unclear tasks,
-   - finished work still sitting in In Progress / Review (not yet archived),
+   - finished work still sitting in In Progress / Review (not yet moved to Done),
    - a stale board (no recent activity),
    - active tasks with no live worker assigned.
 4. For groups that need a pass, **spawn a middle manager**:
@@ -113,7 +113,7 @@ baseline.
      attention.
 5. Optionally curate the always-managed baseline: `mail_set_project_favorite`
    to add a project that clearly needs ongoing oversight, or unfavorite one
-   whose work is fully done and archived. Be conservative — only unfavorite
+   whose work is fully done (all tasks completed). Be conservative — only unfavorite
    when there's genuinely nothing left to manage. Favoriting is **additive** to
    your oversight — an unfavorited group with on-board tasks is still reviewed
    this cycle.

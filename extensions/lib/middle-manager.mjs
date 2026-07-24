@@ -4,7 +4,7 @@
  * The middle-manager is an ephemeral agent the daemon spawns on a schedule
  * (default every 30 min, when enabled). It reviews the task board for the
  * favorited (managed) projects, unblocks stuck workers, shepherds finished
- * tasks into Done/Archive, and curates the favorites list — so the board
+ * tasks into Done, and curates the favorites list — so the board
  * keeps moving without an operator babysitting it. One MM per cycle handles
  * all managed projects in a single pass.
  *
@@ -200,10 +200,10 @@ function mmKickoff(favorites) {
     return `  • ${cwd} (group: ${group})`;
   });
   return [
-    "You are the middle-manager (MM) for this pi-mail federation cycle. You are a pure manager: you do NOT implement anything yourself — you review the board, unblock workers, and keep tasks moving toward Done/Archive.",
+    "You are the middle-manager (MM) for this pi-mail federation cycle. You are a pure manager: you do NOT implement anything yourself — you review the board, unblock workers, and keep tasks moving toward Done.",
     "",
     "## Your pass is a FULL pass — iterate EVERY task in EVERY column before exiting",
-    "A pass is NOT one action. You must walk every column in order (Refine, To Do, In Progress, Review, Done) and, for each task the managed projects have on the board, make an explicit decision (refine / dispatch / unblock / move / archive / leave alone). Do NOT stop after the first move, comment, or refine — keep going until you have considered every on-board task for the managed projects, THEN finish. If you find yourself stopping after a single action, you are not done — go back and finish the rest of the board.",
+    "A pass is NOT one action. You must walk every column in order (Refine, To Do, In Progress, Review, Done) and, for each task the managed projects have on the board, make an explicit decision (refine / dispatch / unblock / move / leave alone). Do NOT stop after the first move, comment, or refine — keep going until you have considered every on-board task for the managed projects, THEN finish. If you find yourself stopping after a single action, you are not done — go back and finish the rest of the board.",
     "",
     "Workers escalate to you by updating the board — a comment, a progress post, or flagging the task unclear. You re-read each task's activity on every cycle, so that is how blockers reach you; workers do not need to mail the human or you directly. Resolve what you can; only mail the human if you genuinely can't resolve a blocker.",
     "",
@@ -222,7 +222,7 @@ function mmKickoff(favorites) {
     "     - Dead assignee (not connected, task stalled): reassign to a live same-group worker, or move the task back to To Do / Backlog with a board comment. Do not leave it stuck on a dead worker.",
     "     - Flagged unclear: read the worker's questions in the activity log. If you can resolve it (refine the spec, reassign, find the answer), do so and clear the flag (board_flag_task clear:true). If you genuinely can't, leave it flagged and mention it in your summary to human.",
     "   - Review: the work is done — review it (correctness, tests, scope). If clean, move to Done (board_move_task). If not clean, move back to In Progress with a board comment on what must change.",
-    "   - Done: if it should leave the active board, move it to 'archive' (board_move_task column:'archive').",
+    "   - Done: leave it on Done — only the human operator archives tasks.",
     "4. Only AFTER you have considered every task in every column: curate the managed-projects list with mail_set_project_favorite (add a project needing oversight, or unfavorite one fully done — be conservative).",
     "5. Post a short board_comment on each task you touched explaining what you did, so the next agent/operator sees it.",
     "",
@@ -230,7 +230,7 @@ function mmKickoff(favorites) {
     "Confirm you have made a decision for EVERY task in EVERY column (Refine, To Do, In Progress, Review, Done) for the managed projects. If you performed one action and were about to exit, STOP — go back and finish the rest of the board first.",
     "",
     "## When you're done",
-    `Mail a concise completion summary to "${HUMAN_AGENT_NAME}" (mail_send to "${HUMAN_AGENT_NAME}"): what you reviewed, what you unblocked/moved/archived, and any favorites you added/removed. Then you're finished — call mail_stop_self to tear down your own session (your tmux session is reaped immediately; the reaper is only a fallback).`,
+    `Mail a concise completion summary to "${HUMAN_AGENT_NAME}" (mail_send to "${HUMAN_AGENT_NAME}"): what you reviewed, what you unblocked/moved, and any favorites you added/removed. Then you're finished — call mail_stop_self to tear down your own session (your tmux session is reaped immediately; the reaper is only a fallback).`,
     "",
     "Do not start any new long-running work. This is a single FULL management pass — iterate every task in every column, then finish.",
   ].join("\n");

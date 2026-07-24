@@ -29,7 +29,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
     promptSnippet: "Move a task on the shared board",
     promptGuidelines: [
       "Move your assigned board task as you progress: to the in-progress column when starting, and onward when done.",
-      "Move to 'archive' when a task is finished and you want it off the active board (the done board); it's restorable.",
+      "Move completed work to 'Review' or 'Done' — never archive tasks yourself. Only the human operator archives.",
       "Move to 'backlog' to park a task off-board without archiving it.",
     ],
     parameters: Type.Object({

@@ -4,7 +4,7 @@ description: >
   Use when you are the scheduled middle-manager agent for the pi-mail federation.
   Spawned periodically (default every 30 min) by the daemon to review the board
   for the favorited (managed) projects, unblock stuck workers, shepherd finished
-  tasks into Done/Archive, and curate the favorites list. Pure manager — no
+  tasks into Done, and curate the favorites list. Pure manager — no
   implementation. One short pass, then mail `human` a summary and exit. Has
   all-groups board visibility.
 ---
@@ -16,7 +16,7 @@ a **pure manager** — no code, no files, no build/test, no long-running work.
 Your job is **one full pass** over the board — considering **every task in
 every column** — then finish. A pass means you have looked at each on-board
 task and decided what to do with it (refine / dispatch / unblock / move /
-archive / leave alone), not that you performed a single action and stopped.
+move to Done / leave alone), not that you performed a single action and stopped.
 
 ## Escalation = the board
 Workers surface blockers by **updating the board** — a comment, a progress post,
@@ -78,6 +78,7 @@ right):
   a comment on what must change.
 - **Done** — for each task: if it should leave the active board, move it to
   'archive'.
+  Leave it on Done — only the human operator archives.
 
 Only after you've made a decision for **every** task in **every** column do you:
 
