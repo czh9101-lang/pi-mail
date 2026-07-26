@@ -134,10 +134,10 @@ export let board = {
     // not an MM or CEO) that does not self-exit (mail_stop_self) within this
     // many minutes is force-killed by the reaper so hung/forgotten workers
     // never leak. Workers often run longer than a management pass, so the
-    // default is generous (30); the reaper is a backstop, not the primary
+    // default is generous (60); the reaper is a backstop, not the primary
     // path. See lib/middle-manager.mjs (reapWorkers) + the ephemerality
     // invariant in the README.
-    workerMaxLifetimeMin: 30,
+    workerMaxLifetimeMin: 60,
     // CEO (top-tier manager): an ephemeral agent spawned on a schedule that
     // reviews the federation at a higher level and spawns middle managers on
     // demand. When enabled, it REPLACES the daemon's fixed-interval MM timer
