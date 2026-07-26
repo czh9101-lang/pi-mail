@@ -38,8 +38,9 @@ import {
   HUMAN_AGENT_NAME,
   agents,
   log,
+  agentDisplayName,
 } from "./core.mjs";
-import { board, setMmAgentTest, setManagerAgentTest } from "./board.mjs";
+import { board, setMmAgentTest, setManagerAgentTest, taskActivity, schedulePersistBoard } from "./board.mjs";
 import {
   spawnAgent,
   stopAgent,
@@ -109,6 +110,36 @@ function isMiddleManager(agentId) {
   return false;
 }
 
+/**
+ * When a worker dies unexpectedly, unassign all board tasks they owned
+ * and post a comment so the next MM pass (or the operator) can re-dispatch.
+ * Does NOT move the task column — the worker may have been in progress.
+ * Only the assignee is cleared; the task stays in its current column.
+ */
+function cleanupTasksForAgent(session) {
+  const names = new Set();
+  if (session.agentName) names.add(session.agentName);
+  // Also match by the agent's registered display name (mail_set_name)
+  if (session.agentId) {
+    const dn = agentDisplayName(session.agentId);
+    if (dn && dn !== session.agentId) names.add(dn);
+  }
+  if (!names.size) return;
+  let count = 0;
+  for (const t of board.tasks) {
+    if (t.assignee && names.has(t.assignee)) {
+      const matched = t.assignee;
+      t.assignee = null;
+      taskActivity(t, "board", `worker '${matched}' disappeared — auto-unassigned`);
+      count++;
+    }
+  }
+  if (count) {
+    schedulePersistBoard();
+    log(`worker reaper: auto-unassigned ${count} task(s) from dead worker '${session.agentName || session.name}'`);
+  }
+}
+
 // ── Reaper ───────────────────────────────────────────────────────────────────
 
 /**
@@ -176,10 +207,15 @@ function reapWorkers(now = Date.now()) {
     const alive = tmuxSessionExists(s.name);
     const overLifetime = now - (s.spawnedAt ?? now) > maxLifetimeMs;
     if (!alive) {
+      // Worker died unexpectedly (not via mail_stop_self — that removes the
+      // session from the registry before the tmux kill, so the reaper never
+      // sees it here). Auto-unassign their board tasks so work isn't stranded.
+      cleanupTasksForAgent(s);
       const r = stopAgent({ name: s.name });
       if (r.error) log(`worker reaper: could not clean up '${s.name}': ${r.error}`);
       else log(`worker reaper: reaped exited session '${s.name}'`);
     } else if (overLifetime) {
+      cleanupTasksForAgent(s);
       const r = stopAgent({ name: s.name });
       if (r.error) log(`worker reaper: could not stop over-lifetime '${s.name}': ${r.error}`);
       else log(`worker reaper: stopped over-lifetime session '${s.name}' (${Math.round((now - s.spawnedAt) / 60000)}m)`);
