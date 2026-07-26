@@ -28,6 +28,33 @@
  * Config lives in `board.config` (per-board): `mmEnabled` (default false),
  * `mmIntervalMin` (default 30), `mmModel` (optional), `mmMaxLifetimeMin`
  * (default 15). Editable via the Board UI settings + set_board_config.
+ *
+ * Worker failure modes (detected by reapWorkers + cleanupTasksForAgent):
+ *
+ * 1. tmux session killed externally — `tmux kill-session -t <name>` or
+ *    operator kills the tmux pane. Detected: !alive (tmuxSessionExists)
+ *    on next reaper tick (≤ 30s). Tasks auto-unassigned + comment posted.
+ *
+ * 2. OOM / process crash — the pi agent process dies and tmux exits.
+ *    Detected: same as above (!alive). Tasks auto-unassigned.
+ *
+ * 3. Daemon restart — all tmux sessions survive (they are detached), but
+ *    the agents briefly disconnect and reconnect. NOT treated as death
+ *    (alive = true). No task impact — the agent resumes its work.
+ *
+ * 4. Network loss — the agent disconnects from the daemon socket but the
+ *    tmux session is still alive. NOT treated as death (alive = true).
+ *    The agent reconnects on the next daemon tick.
+ *
+ * 5. Over-lifetime — worker runs beyond workerMaxLifetimeMin (default 30).
+ *    Force-killed by the reaper. Tasks auto-unassigned BEFORE kill.
+ *
+ * 6. Graceful exit (mail_stop_self) — worker calls mail_stop_self when
+ *    done. Session is removed from spawnRegistry BEFORE the tmux kill, so
+ *    the reaper never sees it. NOT treated as death — tasks should be
+ *    completed/finished by the worker before self-exit.
+ *
+ * All unexpected deaths are logged with the session name and task count.
  */
 
 import path from "node:path";
@@ -116,7 +143,7 @@ function isMiddleManager(agentId) {
  * Does NOT move the task column — the worker may have been in progress.
  * Only the assignee is cleared; the task stays in its current column.
  */
-function cleanupTasksForAgent(session) {
+function cleanupTasksForAgent(session, reason) {
   const names = new Set();
   if (session.agentName) names.add(session.agentName);
   // Also match by the agent's registered display name (mail_set_name)
@@ -130,13 +157,13 @@ function cleanupTasksForAgent(session) {
     if (t.assignee && names.has(t.assignee)) {
       const matched = t.assignee;
       t.assignee = null;
-      taskActivity(t, "board", `worker '${matched}' disappeared — auto-unassigned`);
+      taskActivity(t, "board", `worker '${matched}' disappeared (${reason || "unknown"}) — auto-unassigned`);
       count++;
     }
   }
   if (count) {
     schedulePersistBoard();
-    log(`worker reaper: auto-unassigned ${count} task(s) from dead worker '${session.agentName || session.name}'`);
+    log(`worker reaper: auto-unassigned ${count} task(s) from '${session.agentName || session.name}' — ${reason || "unknown"}`);
   }
 }
 
@@ -210,12 +237,12 @@ function reapWorkers(now = Date.now()) {
       // Worker died unexpectedly (not via mail_stop_self — that removes the
       // session from the registry before the tmux kill, so the reaper never
       // sees it here). Auto-unassign their board tasks so work isn't stranded.
-      cleanupTasksForAgent(s);
+      cleanupTasksForAgent(s, "tmux session ended (crash/kill/OOM)");
       const r = stopAgent({ name: s.name });
       if (r.error) log(`worker reaper: could not clean up '${s.name}': ${r.error}`);
       else log(`worker reaper: reaped exited session '${s.name}'`);
     } else if (overLifetime) {
-      cleanupTasksForAgent(s);
+      cleanupTasksForAgent(s, "exceeded max lifetime");
       const r = stopAgent({ name: s.name });
       if (r.error) log(`worker reaper: could not stop over-lifetime '${s.name}': ${r.error}`);
       else log(`worker reaper: stopped over-lifetime session '${s.name}' (${Math.round((now - s.spawnedAt) / 60000)}m)`);
