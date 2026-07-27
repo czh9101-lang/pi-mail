@@ -49,6 +49,12 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
         let tasks = b.tasks ?? [];
         if (params.mine) tasks = tasks.filter((t) => t.assignee === ctx.agentName);
         if (params.level) tasks = tasks.filter((t) => (t.level ?? "task") === params.level);
+        if (params.priority) tasks = tasks.filter((t) => t.priority === params.priority);
+        // Client-side priority sort
+        if (params.sort === "priority") {
+          const rank = (p: string | null) => ({ high: 0, medium: 1, low: 2 } as Record<string, number>)[p ?? ""] ?? 3;
+          tasks = [...tasks].sort((a, b) => rank(a.priority) - rank(b.priority));
+        }
         const wantLoc = params.location;
         const showArchive = !!params.includeArchived || wantLoc === "archive";
         const cols = b.columns ?? [];

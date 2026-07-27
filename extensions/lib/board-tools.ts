@@ -15,7 +15,7 @@ export interface BoardTask { id: string; key: string | null; origin: "jira" | "l
 interface BoardStateResp { type: string; message?: string; columns: BoardColumn[]; tasks: BoardTask[]; jiraConfigured: boolean; jiraEnabled?: boolean; lastSync: number; syncError: string | null; myGroup: string | null; group?: string | null; }
 export interface BoardToolCtx { client: MailClient | null; connected: boolean; agentName: string; notConnected: { content: { type: "text"; text: string }[] }; }
 export function errText(err: unknown) { return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }; }
-export function taskLine(t: BoardTask): string { const key = t.key ? `${t.key} ` : ""; const who = t.assignee ? ` → ${t.assignee}` : ""; const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : ""; const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : ""; const flag = t.flagged ? ` ⚠unclear` : ""; const lvl = t.level && t.level !== "task" ? ` ${t.level}` : ""; const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : ""; const grp = t.group ? ` ⟨${t.group}⟩` : ""; return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${status}${sub}${loc}${grp}${flag}`; }
+export function taskLine(t: BoardTask): string { const key = t.key ? `${t.key} ` : ""; const who = t.assignee ? ` → ${t.assignee}` : ""; const status = t.jiraStatus ? ` [jira: ${t.jiraStatus}]` : ""; const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : ""; const flag = t.flagged ? ` ⚠unclear` : ""; const lvl = t.level && t.level !== "task" ? ` ${t.level}` : ""; const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : ""; const grp = t.group ? ` ⟨${t.group}⟩` : ""; const pri = t.priority ? ` 🔺${t.priority}` : ""; return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${lvl}${who}${pri}${status}${sub}${loc}${grp}${flag}`; }
 export function boardOpResult(resp: { type: string; warning?: string; message?: string; task?: BoardTask }, okText: string) { if (resp.type === "error") { return { content: [{ type: "text" as const, text: `❌ ${resp.message}` }] }; } const warn = resp.warning ? `\n⚠️ ${resp.warning}` : ""; return { content: [{ type: "text" as const, text: `✅ ${okText}${warn}` }], details: { task: resp.task } }; }
 export async function fetchBoard(ctx: BoardToolCtx, opts: { location?: string; includeArchived?: boolean; group?: string } = {}): Promise<BoardStateResp> { if (!ctx.connected || !ctx.client) throw new Error("Not connected to mail daemon"); const resp = await ctx.client.request<BoardStateResp>({ type: "board_state", ...opts }); if (resp.type !== "board") throw new Error(resp.message ?? "unknown board error"); return resp; }
 export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
@@ -145,7 +145,8 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
       "(or inJira is true) a real Jira issue is created and kept in sync. Otherwise the task is board-only. " +
       "Pass backlog:true to create straight into the Backlog pool (off-board, local-only). " +
       "Use level to set the issue hierarchy: 'epic' | 'story' | 'task' | 'subtask' (default 'task', or 'subtask' when parent is given). " +
-      "A story may reference an epic by id via epicId. Set group to assign the task to a project group (omit for ungrouped).",
+      "A story may reference an epic by id via epicId. Set group to assign the task to a project group (omit for ungrouped). " +
+      "Set priority to 'high', 'medium', or 'low' (default: none).",
     promptSnippet: "Create a task on the shared board",
     parameters: Type.Object({
       summary: Type.String({ description: "One-line task summary" }),
@@ -157,6 +158,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
       epicId: Type.Optional(Type.String({ description: "For a story: the board id (or prefix) of its epic" })),
       backlog: Type.Optional(Type.Boolean({ description: "Create in the Backlog pool (off-board, local-only) instead of a column" })),
       group: Type.Optional(Type.String({ description: "Project group for the task (omit for ungrouped/current behavior)" })),
+      priority: Type.Optional(Type.String({ description: "Priority: 'high', 'medium', or 'low' (default: none)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
@@ -173,6 +175,7 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
             epicId: params.epicId,
             backlog: params.backlog,
             group: params.group,
+            priority: params.priority,
           },
           30_000
         );
@@ -268,20 +271,22 @@ export function registerBoardTools(pi: ExtensionAPI, ctx: BoardToolCtx): void {
     name: "board_update_task",
     label: "Board: Update",
     description:
-      "Update a board task's summary and/or description. For Jira-synced tasks the edit is also pushed to the Jira issue. " +
-      "Use this to make a vague task clear (e.g. after refining: goal, scope, acceptance criteria).",
+      "Update a board task's summary, description, priority and/or group. For Jira-synced tasks the edit is also pushed to the Jira issue. " +
+      "Use this to make a vague task clear (e.g. after refining: goal, scope, acceptance criteria). " +
+      "Priority: 'high', 'medium', 'low', or empty string to clear.",
     promptSnippet: "Edit a board task",
     parameters: Type.Object({
       taskId: Type.String({ description: "Task id prefix or Jira key" }),
       summary: Type.Optional(Type.String({ description: "New summary" })),
       description: Type.Optional(Type.String({ description: "New description" })),
       group: Type.Optional(Type.String({ description: "Project group for the task (empty string to clear, omit to leave unchanged). Use favorites/mail_list_projects basenames as valid group names." })),
+      priority: Type.Optional(Type.String({ description: "Priority: 'high', 'medium', 'low', or empty string to clear (omit to leave unchanged)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, _ctx) {
       if (!ctx.connected || !ctx.client) return ctx.notConnected;
       try {
         const resp = await ctx.client.request<{ type: string; message?: string; task?: BoardTask }>(
-          { type: "board_update", taskId: params.taskId, summary: params.summary, description: params.description, group: params.group },
+          { type: "board_update", taskId: params.taskId, summary: params.summary, description: params.description, group: params.group, priority: params.priority },
           30_000
         );
         return boardOpResult(resp, `Updated ${resp.task?.key ?? params.taskId}`);

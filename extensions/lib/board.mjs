@@ -422,6 +422,13 @@ export function boardState(actorId, opts = {}) {
       return (b.archivedAt ?? 0) - (a.archivedAt ?? 0); // newest first
     });
   }
+  // Priority sort (task df729d21): when opts.sort === "priority", tasks are
+  // ordered by priority level (high > medium > low > none) within each column.
+  // The sort is stable so same-priority tasks keep their original order.
+  if (opts.sort === "priority") {
+    const rank = (p) => ({ high: 0, medium: 1, low: 2 })[p] ?? 3;
+    tasks = [...tasks].sort((a, b) => rank(a.priority) - rank(b.priority));
+  }
   // Jira-disable scrub (task 6e6e2ab2): the board runs board-only whenever
   // Jira is effectively off — either because the master switch is flipped
   // off (jiraEnabled:false) OR because no credentials are configured

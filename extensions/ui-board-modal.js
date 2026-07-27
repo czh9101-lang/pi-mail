@@ -60,7 +60,7 @@ function renderTaskModal() {
   meta.appendChild(el("span", "assignee" + (t.assignee ? "" : " none"), t.assignee || "unassigned"));
   if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
-  if (t.priority) meta.appendChild(el("span", "badge", t.priority));
+  if (t.priority) meta.appendChild(el("span", "badge pri-" + t.priority, "🔺 " + t.priority));
   const mg = taskGroup(t);
   if (mg && mg !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + mg + "⟩"));
   if (t.flagged) {
@@ -190,6 +190,19 @@ function renderTaskModal() {
     boardPost("/api/board/update", { taskId: t.id, group }, "Group updated").then(r => { if (r.ok) closeTaskModal(); });
   });
   actions.appendChild(gp);
+  // Priority change dropdown (task df729d21)
+  const pp = el("select");
+  pp.appendChild((() => { const o = el("option"); o.value = ""; o.textContent = "→ change priority…"; return o; })());
+  for (const p of ["high", "medium", "low"]) {
+    const o = el("option"); o.value = p; o.textContent = p; if (p === (t.priority || "")) o.selected = true; pp.appendChild(o);
+  }
+  const ppClear = el("option"); ppClear.value = "__clear__"; ppClear.textContent = "(none)"; pp.appendChild(ppClear);
+  pp.addEventListener("change", () => {
+    if (!pp.value && pp.value !== "") return;
+    const priority = pp.value === "__clear__" ? "" : pp.value;
+    boardPost("/api/board/update", { taskId: t.id, priority }, "Priority → " + (priority || "none")).then(r => { if (r.ok) closeTaskModal(); });
+  });
+  actions.appendChild(pp);
   // Assign select
   const as = el("select");
   const optNone = el("option"); optNone.value = ""; optNone.textContent = "→ assign…"; as.appendChild(optNone);

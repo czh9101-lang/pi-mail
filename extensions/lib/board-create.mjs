@@ -32,7 +32,7 @@ import {
  * the parent is a Jira issue (or `inJira` is set), a real Jira issue is
  * created too and kept in sync (pinned, so it survives JQL filtering).
  */
-export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog, group } = {}) {
+export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog, group, priority } = {}) {
   const s = String(summary ?? "").trim();
   if (!s) return { error: "Summary is required" };
   const parentTask = parent ? findBoardTask(parent) : null;
@@ -68,7 +68,7 @@ export async function boardCreate(actorId, { summary, description, column, paren
     jiraStatus: null,
     columnId: col ? col.id : null,
     assignee: null,
-    priority: null,
+    priority: (["high", "medium", "low"].includes(String(priority ?? "").trim().toLowerCase()) ? String(priority).trim().toLowerCase() : null),
     issueType: null,
     parentId: parentTask?.id ?? null,
     parentKey: parentTask?.key ?? null,
@@ -125,7 +125,7 @@ export async function boardCreate(actorId, { summary, description, column, paren
   return { ok: true, task };
 }
 
-export async function boardUpdate(actorId, taskSpec, { summary, description, group } = {}) {
+export async function boardUpdate(actorId, taskSpec, { summary, description, group, priority } = {}) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
   const actor = agentDisplayName(actorId);
@@ -143,7 +143,23 @@ export async function boardUpdate(actorId, taskSpec, { summary, description, gro
     task.group = g || null;
     changes.push(g ? `group → ${g}` : "group (cleared)");
   }
-  if (!changes.length) return { error: "Nothing to update (pass summary, description, and/or group)" };
+  // priority: pass a string "high"|"medium"|"low" or an empty string to clear.
+  // null/undefined/omitted means "no change".
+  if (typeof priority === "string") {
+    const p = priority.trim().toLowerCase();
+    if (["high", "medium", "low"].includes(p)) {
+      task.priority = p;
+      changes.push(`priority → ${p}`);
+    } else if (p === "") {
+      task.priority = null;
+      changes.push("priority (cleared)");
+    } else {
+      // unrecognized value — still set it to null as a safe default
+      task.priority = null;
+      changes.push("priority (cleared)");
+    }
+  }
+  if (!changes.length) return { error: "Nothing to update (pass summary, description, priority, and/or group)" };
   let warning;
   if (task.origin === "jira" && jiraPushOk()) {
     try {

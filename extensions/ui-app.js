@@ -149,6 +149,14 @@ function renderBoard() {
     const g = projectOf(a.cwd);
     if (!seenGroups.has(g) && g !== "(no project)") { seenGroups.add(g); const o = el("option"); o.value = g; o.textContent = g; grpPick.appendChild(o); }
   }
+  // Priority picker (task df729d21)
+  const priPick = el("select", "agentpick");
+  priPick.title = "Priority";
+  priPick.appendChild((() => { const o = el("option"); o.value = ""; o.textContent = "priority…"; return o; })());
+  for (const p of ["high", "medium", "low"]) {
+    const o = el("option"); o.value = p; o.textContent = p; if (p === (boardUi.newTask.priority || "")) o.selected = true; priPick.appendChild(o);
+  }
+  priPick.addEventListener("change", () => boardUi.newTask.priority = priPick.value);
   const addBtn = el("button", "btn", "Add task");
   addBtn.addEventListener("click", async () => {
     const summary = boardUi.newTask.summary.trim();
@@ -156,12 +164,13 @@ function renderBoard() {
     const payload = { summary, level: boardUi.newTask.level, backlog: boardUi.newTask.backlog };
     if (!boardUi.newTask.backlog) payload.column = colPick.value;
     if (grpPick.value) payload.group = grpPick.value;
+    if (priPick.value) payload.priority = priPick.value;
     const desc = boardUi.newTask.description.trim();
     if (desc) payload.description = desc;
     const r = await boardPost("/api/board/create", payload, "Task created");
-    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; inSum.value = ""; inDesc.value = ""; }
+    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; boardUi.newTask.priority = ""; inSum.value = ""; inDesc.value = ""; }
   });
-  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(grpPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
+  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(grpPick); nt.appendChild(priPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
 
   // Kanban columns

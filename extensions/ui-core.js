@@ -9,7 +9,7 @@ let compose = { to: "", subject: "", body: "", newSession: false }; // sticky co
 let boardUi = {
   taskModalId: null,            // task whose detail modal is open
   freshSession: true,           // newSession flag used when assigning
-  newTask: { summary: "", description: "", column: "", level: "task", backlog: false },
+  newTask: { summary: "", description: "", column: "", level: "task", backlog: false, priority: "" },
   draftComments: {},            // taskId -> comment draft
   colsDraft: null,              // unsaved column edits (Settings tab)
   showArchive: false,           // status filter: show done (archived) tasks

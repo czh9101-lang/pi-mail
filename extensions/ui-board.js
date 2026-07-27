@@ -225,7 +225,7 @@ function taskCard(t, board) {
   if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
   if (t.level && t.level !== "task") meta.appendChild(el("span", "badge sub", t.level));
-  if (t.priority) meta.appendChild(el("span", "badge", t.priority));
+  if (t.priority) meta.appendChild(el("span", "badge pri-" + t.priority, "🔺 " + t.priority));
   const g = taskGroup(t);
   if (g && g !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + g + "⟩"));
 
