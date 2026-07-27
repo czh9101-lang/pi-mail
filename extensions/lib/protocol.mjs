@@ -37,6 +37,7 @@ import {
 import { mmTick, mmState, mmKickoff } from "./middle-manager.mjs";
 import { ceoTick, ceoState, ceoKickoff } from "./ceo.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
+import { pushConsoleError, getConsoleErrors, clearConsoleErrors } from "./console-errors.mjs";
 import os from "node:os";
 import { notifySSE } from "./sse-events.mjs";
 
@@ -365,6 +366,24 @@ export function handleMessage(agentId, msg, socket) {
         const idx = box.findIndex((m) => m.id === msg.messageId);
         if (idx !== -1) box.splice(idx, 1);
       }
+      reply({ type: "ok" });
+      break;
+    }
+
+    // ── Console errors ─────────────────────────────────────────────────
+    case "console_errors_push": {
+      if (msg.message) {
+        pushConsoleError({ level: msg.level, message: msg.message, stack: msg.stack, source: msg.source });
+      }
+      reply({ type: "ok", total: getConsoleErrors().length });
+      break;
+    }
+    case "console_errors_get": {
+      reply({ type: "console_errors", entries: getConsoleErrors({ limit: msg.limit, level: msg.level }) });
+      break;
+    }
+    case "console_errors_clear": {
+      clearConsoleErrors();
       reply({ type: "ok" });
       break;
     }

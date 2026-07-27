@@ -49,6 +49,7 @@ import {
 } from "./spawn.mjs";
 import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
+import { consoleErrors, pushConsoleError, getConsoleErrors, clearConsoleErrors } from "./console-errors.mjs";
 import { attachTerminalUpgrade } from "./http-terminal.mjs";
 import { sseEvents } from "./sse-events.mjs";
 
@@ -556,6 +557,46 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
     // (e.g. bundle-mcp) hang until their connect timeout. We only pre-parse
     // the POST body (to enforce the size guard). Stateless: a fresh McpServer
     // + transport per POST/DELETE, no session id (http-mcp.mjs).
+    // ── Console error ring buffer ──────────────────────────────────────
+    // GET: query errors (with optional ?limit=N&level=error|warn|all)
+    // POST: push an error entry from a client (agent, web UI, mobile app)
+    if (url.pathname === "/api/console-errors") {
+      if (req.method === "GET") {
+        const limit = parseInt(url.searchParams.get("limit") || "", 10);
+        const level = url.searchParams.get("level") || undefined;
+        const entries = getConsoleErrors({ limit: Number.isFinite(limit) ? limit : undefined, level });
+        json(res, 200, { entries, total: consoleErrors.length });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        if (!body.message && !body.entries) {
+          json(res, 400, { ok: false, error: "Missing 'message' or 'entries'" });
+          return;
+        }
+        // Single entry push
+        if (body.message) {
+          pushConsoleError({ level: body.level, message: body.message, stack: body.stack, source: body.source });
+        }
+        // Batch push (e.g. from a mobile app that batches offline errors)
+        if (body.entries && Array.isArray(body.entries)) {
+          for (const e of body.entries) {
+            if (e.message) pushConsoleError({ level: e.level, message: e.message, stack: e.stack, source: e.source });
+          }
+        }
+        if (body.clear) clearConsoleErrors();
+        json(res, 200, { ok: true, total: consoleErrors.length });
+        return;
+      }
+      if (req.method === "DELETE") {
+        clearConsoleErrors();
+        json(res, 200, { ok: true });
+        return;
+      }
+      json(res, 405, { error: "method not allowed" });
+      return;
+    }
+
     if (url.pathname === "/mcp") {
       const body = req.method === "POST" ? await readJsonBody(req) : undefined;
       await handleMcpRequest(req, res, body);
