@@ -361,15 +361,49 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
     },
   );
 
+  // ── list_projects ────────────────────────────────────────────────────────
+  // Surfaces the daemon's project registry (favorites + recent spawn history)
+  // so MCP clients can discover project paths for chat_post cwd. Each entry
+  // indicates whether a live agent is currently running in that dir.
+  server.tool(
+    "list_projects",
+    "List known project directories (favorites + recent spawn history) so you can discover the correct cwd for chat_post. Each entry shows the absolute path, whether a spawned agent is currently alive there, and (for history) the last spawn time + count. Use this before chat_post when you don't know the project's absolute path.",
+    {},
+    async () => {
+      try {
+        const projects = await http.listProjects();
+        const lines: string[] = [];
+        if (projects.favorites && projects.favorites.length) {
+          lines.push("⭐ Favorites:");
+          for (const p of projects.favorites) {
+            lines.push(`  ${p.cwd}${p.alive ? " 🟢" : ""}`);
+          }
+          lines.push("");
+        }
+        if (projects.history && projects.history.length) {
+          lines.push("🕐 Recent:");
+          for (const p of projects.history) {
+            const ago = Math.round((Date.now() - p.lastSpawnedAt) / 60000);
+            lines.push(`  ${p.cwd}${p.alive ? " 🟢" : ""}  (${p.count} spawns, last ${ago}m ago as "${p.lastName}")`);
+          }
+        }
+        if (!lines.length) return ok("No project directories recorded yet. Spawn an agent first, or pass an absolute cwd to chat_post directly.");
+        return ok(lines.join("\n"));
+      } catch (e) {
+        return toolError(e);
+      }
+    },
+  );
+
   // ── chat_post ─────────────────────────────────────────────────────────────
   // Multi-turn chat with a project's spawned agent over pi-mail. Spawns (or
   // reuses) a chat worker for the project cwd, delivers the question, and
   // (by default) blocks until the agent replies. See lib/chat.mjs.
   server.tool(
     "chat_post",
-    "Send a question to a project's chat agent over pi-mail. With no thread_id, starts a new thread (spawns a chat worker for the project cwd) and returns a thread_id. With an existing thread_id, continues the multi-turn conversation. By default (wait=true) blocks until the agent replies and returns the answer + thread_id; pass wait:false to get the thread_id immediately and fetch the answer later with chat_get. The agent is auto-killed after 1h of no communication.",
+    "Send a question to a project's chat agent over pi-mail. With no thread_id, starts a new thread (spawns a chat worker for the project cwd) and returns a thread_id. With an existing thread_id, continues the multi-turn conversation. By default (wait=true) blocks until the agent replies and returns the answer + thread_id; pass wait:false to get the thread_id immediately and fetch the answer later with chat_get. The agent is auto-killed after 1h of no communication. Use list_projects first if you don't know the project's absolute path.",
     {
-      cwd: z.string().describe("Absolute working directory of the project to chat with"),
+      cwd: z.string().describe("Absolute working directory of the project to chat with (discover via list_projects if unknown)"),
       message: z.string().describe("The question / message to send to the project's agent"),
       thread_id: z.string().optional().describe("Existing thread id to continue a multi-turn chat; omit to start a new thread"),
       wait: z.boolean().optional().describe("When true (default), block until the agent replies and return the answer. When false, return the thread_id immediately."),
@@ -378,7 +412,9 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
     async ({ cwd, message, thread_id, wait, timeout_ms }) => {
       try {
         const r = await http.chatPost({ cwd, message, threadId: thread_id, wait: wait !== false, timeoutMs: timeout_ms });
-        if (r.error) return ok(`❌ ${r.error}`);
+        if (r.error) return ok(`❌ ${r.error}
+
+💡 Run list_projects to discover available project paths.`);
         if (wait === false || (!r.answer && !r.history)) {
           return ok(`🧵 Thread ${r.threadId} — question sent. Use chat_get with this thread_id to fetch the answer.`);
         }

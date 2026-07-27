@@ -235,7 +235,7 @@ async function ensureThreadAgent(thread) {
  * @returns {Promise<{ threadId: string, answer?: string, history?: ChatMessage[], error?: string }>}
  */
 export async function chatPost({ cwd, message, threadId, wait = true, timeoutMs }) {
-  if (!cwd) return { error: "cwd (project directory) is required" };
+  if (!cwd) return { error: "cwd (project directory) is required — use list_projects to discover available project paths" };
   if (!message || !String(message).trim()) return { error: "message is required" };
 
   let thread;

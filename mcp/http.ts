@@ -98,6 +98,16 @@ export async function flagTask(taskId: string, reason?: string, clear?: boolean)
   return request<BoardOpResponse>("POST", "/api/board/flag", { taskId, reason, clear });
 }
 
+// ── Projects ────────────────────────────────────────────────────────────────
+
+/** GET /api/spawn/projects — favorites + spawn history with liveness. */
+export async function listProjects(): Promise<{
+  favorites: { cwd: string; alive: boolean }[];
+  history: { cwd: string; lastSpawnedAt: number; count: number; lastName: string; alive: boolean }[];
+}> {
+  return request("GET", "/api/spawn/projects");
+}
+
 // ── MCP project chat ─────────────────────────────────────────────────────────
 
 /** POST /api/chat/post — send a question to a project's chat agent. */
@@ -142,6 +152,7 @@ export const httpBackend: BoardBackend = {
   flagTask,
   chatPost,
   chatGet,
+  listProjects,
   listMessages,
 } as BoardBackend;
 

@@ -213,6 +213,8 @@ export interface BoardBackend {
   createTask(body: CreateTaskBody): Promise<BoardOpResponse>;
   updateTask(taskId: string, body: UpdateTaskBody): Promise<BoardOpResponse>;
   flagTask(taskId: string, reason?: string, clear?: boolean): Promise<BoardOpResponse>;
+  // ── Projects (favorites + spawn history) ─────────────────────────────────
+  listProjects(): Promise<{ favorites: { cwd: string; alive: boolean }[]; history: { cwd: string; lastSpawnedAt: number; count: number; lastName: string; alive: boolean }[] }>;
   // ── MCP project chat ────────────────────────────────────────────────────
   chatPost(body: ChatPostBody): Promise<ChatResult>;
   chatGet(body: ChatGetBody): Promise<ChatResult>;

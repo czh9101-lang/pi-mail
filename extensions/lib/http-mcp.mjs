@@ -35,6 +35,7 @@ import {
 import { syncBoard } from "./jira.mjs";
 import { messagePage } from "./core.mjs";
 import { chatPost, chatGet } from "./chat.mjs";
+import { projectsState } from "./spawn.mjs";
 
 const HUMAN_AGENT_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -142,6 +143,9 @@ const inProcessBoardBackend = {
   },
   listMessages(opts) {
     return messagePage(opts);
+  },
+  listProjects() {
+    return projectsState();
   },
 };
 

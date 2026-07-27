@@ -196,7 +196,7 @@ test("tools/list exposes the board tools", async () => {
     "board_list_tasks", "board_get_task", "board_move_task", "board_comment_task",
     "board_progress_task", "board_assign_task", "board_create_task", "board_split_task",
     "board_update_task", "board_flag_task", "get_board_config", "set_board_config", "sync_board",
-    "chat_post", "chat_get",
+    "list_projects", "chat_post", "chat_get",
   ]) {
     assert.ok(names.includes(expected), `missing tool ${expected}`);
   }
@@ -351,6 +351,13 @@ test("get_board_config returns column list", async () => {
   const cfg = JSON.parse(r.body.result.content[0].text);
   assert.ok(Array.isArray(cfg.columns) && cfg.columns.length > 0);
   assert.equal(cfg.config.apiTokenSet, false);
+});
+
+test("list_projects returns an empty project list in a fresh daemon", async () => {
+  const r = await call("tools/call", { name: "list_projects", arguments: {} });
+  assert.ok(!r.body.result.isError, "tool returned an error: " + (r.body.result.content?.[0]?.text ?? ""));
+  const text = r.body.result.content[0].text;
+  assert.match(text, /No project directories recorded yet/);
 });
 
 // ── board_get_task cross-group resolution (task 16a594db, Part B) ────────────
