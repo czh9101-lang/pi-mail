@@ -64,6 +64,8 @@ export interface BoardTask {
   level?: "epic" | "story" | "task" | "subtask";
   /** Board id of the epic a story belongs to (local-only). */
   epicId?: string | null;
+  /** Project group that owns this task (cwd basename, e.g. "reader"). */
+  group?: string | null;
 }
 
 /** Response from GET /api/board — the whole board state. */
@@ -120,12 +122,16 @@ export interface CreateTaskBody {
   epicId?: string;
   /** Create in the Backlog pool (off-board, local-only) instead of a column. */
   backlog?: boolean;
+  /** Project group name for the task (omit for ungrouped/current behavior). */
+  group?: string;
 }
 
 /** Shape of the update-task body (mirrors POST /api/board/update). */
 export interface UpdateTaskBody {
   summary?: string;
   description?: string;
+  /** Project group for the task (empty string to clear, omit to leave unchanged). */
+  group?: string;
 }
 
 // ── MCP project chat ─────────────────────────────────────────────────────────

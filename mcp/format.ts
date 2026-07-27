@@ -18,8 +18,9 @@ export function taskLine(t: BoardTask): string {
   const sub = t.parentKey || t.parentId ? ` ↳sub of ${t.parentKey ?? t.parentId?.slice(0, 8)}` : "";
   const lvl = t.level && t.level !== "task" ? ` ${t.level}` : "";
   const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : "";
+  const grp = t.group ? ` ⟨${t.group}⟩` : "";
   const flag = t.flagged ? ` ⚠unclear` : "";
-  return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${lvl}${loc}${flag}`;
+  return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${lvl}${loc}${grp}${flag}`;
 }
 
 /** Filters for board_list_tasks, mirroring the agent tool's parameters. */
@@ -102,6 +103,7 @@ export function renderTask(t: BoardTask, b: BoardState): string {
     `Id:       ${t.id}`,
     `Location: ${locLabel}${locNote}${t.level ? ` | Level: ${t.level}` : ""}${t.epicId ? ` | Epic: ${t.epicId.slice(0, 8)}` : ""}`,
     `Assignee: ${t.assignee ?? "—"}`,
+    `Group:    ${t.group ?? "—"}${t.assignee ? "" : " (none — visible to all groups)"}`,
     `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
     ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
     ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
