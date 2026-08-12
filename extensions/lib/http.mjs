@@ -691,8 +691,9 @@ function emptyCostResult() {
     if (req.method === "GET" && url.pathname === "/api/costs") {
       const refresh = url.searchParams.get("refresh") === "1";
       if (!refresh && costCache && (Date.now() - costCacheTs) < COST_CACHE_TTL) {
+        const cached = { ...costCache, _cacheHit: true, _cacheAge: Math.round((Date.now() - costCacheTs) / 1000) };
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "hit" });
-        res.end(JSON.stringify(costCache));
+        res.end(JSON.stringify(cached));
         return;
       }
       // If a scan is in progress, wait for it instead of starting a second one.
@@ -710,7 +711,8 @@ function emptyCostResult() {
         costCache = data;
         costCacheTs = Date.now();
         costScanPromise = null;
-        log(`Costs: cached result (${data.byProject?.length || 0} projects, ${data.byModel?.length || 0} models)`);
+        data._cacheHit = false;
+        data._cacheAge = 0;
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "miss" });
         res.end(JSON.stringify(data));
       } catch (e) {
