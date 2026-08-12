@@ -436,11 +436,11 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
     }
 
     // ── Cost aggregation cache ────────────────────────────────────────────
-
-let costCache = null;
-let costCacheTs = 0;
-let costScanPromise = null; // in-flight scan — concurrent requests wait on this
+// Uses globalThis to ensure state persists across module reloads.
+if (!globalThis.__piCostCache) globalThis.__piCostCache = { data: null, ts: 0, promise: null };
 const COST_CACHE_TTL = 5 * 60_000; // 5 min
+
+function costCache() { return globalThis.__piCostCache; }
 
 function round(n) { return Math.round(n * 10000) / 10000; }
 
@@ -678,45 +678,47 @@ function emptyCostResult() {
     // Cached with a 5-min TTL; pass ?refresh=1 to force a rescan.
 
     if (req.method === "GET" && url.pathname === "/api/costs/debug") {
+      const cc = costCache();
       json(res, 200, {
-        hasCache: !!costCache,
-        cacheAge: costCacheTs ? Math.round((Date.now() - costCacheTs) / 1000) : null,
+        hasCache: !!cc.data,
+        cacheAge: cc.ts ? Math.round((Date.now() - cc.ts) / 1000) : null,
         ttl: COST_CACHE_TTL / 1000,
-        inFlight: !!costScanPromise,
-        generated: costCache?.generated || null,
+        inFlight: !!cc.promise,
+        generated: cc.data?.generated || null,
       });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/costs") {
       const refresh = url.searchParams.get("refresh") === "1";
-      if (!refresh && costCache && (Date.now() - costCacheTs) < COST_CACHE_TTL) {
-        const cached = { ...costCache, _cacheHit: true, _cacheAge: Math.round((Date.now() - costCacheTs) / 1000) };
+      const cc = costCache();
+      if (!refresh && cc.data && (Date.now() - cc.ts) < COST_CACHE_TTL) {
+        const cached = { ...cc.data, _cacheHit: true, _cacheAge: Math.round((Date.now() - cc.ts) / 1000) };
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "hit" });
         res.end(JSON.stringify(cached));
         return;
       }
       // If a scan is in progress, wait for it instead of starting a second one.
-      if (!refresh && costScanPromise) {
+      if (!refresh && cc.promise) {
         try {
-          const data = await costScanPromise;
-          costCacheTs = Date.now();
+          const data = await cc.promise;
+          cc.ts = Date.now();
           json(res, 200, data);
         } catch { /* fall through to new scan */ }
         return;
       }
       try {
-        costScanPromise = scanCosts();
-        const data = await costScanPromise;
-        costCache = data;
-        costCacheTs = Date.now();
-        costScanPromise = null;
+        cc.promise = scanCosts();
+        const data = await cc.promise;
+        cc.data = data;
+        cc.ts = Date.now();
+        cc.promise = null;
         data._cacheHit = false;
         data._cacheAge = 0;
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "miss" });
         res.end(JSON.stringify(data));
       } catch (e) {
-        costScanPromise = null;
+        cc.promise = null;
         json(res, 500, { error: e?.message ?? String(e) });
       }
       return;
