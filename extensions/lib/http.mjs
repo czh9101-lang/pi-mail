@@ -710,6 +710,7 @@ function emptyCostResult() {
         costCache = data;
         costCacheTs = Date.now();
         costScanPromise = null;
+        log(`Costs: cached result (${data.byProject?.length || 0} projects, ${data.byModel?.length || 0} models)`);
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "miss" });
         res.end(JSON.stringify(data));
       } catch (e) {
