@@ -439,6 +439,7 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
 
 let costCache = null;
 let costCacheTs = 0;
+let costScanPromise = null; // in-flight scan — concurrent requests wait on this
 const COST_CACHE_TTL = 5 * 60_000; // 5 min
 
 function round(n) { return Math.round(n * 10000) / 10000; }
@@ -682,12 +683,24 @@ function emptyCostResult() {
         json(res, 200, costCache);
         return;
       }
+      // If a scan is in progress, wait for it instead of starting a second one.
+      if (!refresh && costScanPromise) {
+        try {
+          const data = await costScanPromise;
+          costCacheTs = Date.now();
+          json(res, 200, data);
+        } catch { /* fall through to new scan */ }
+        return;
+      }
       try {
-        const data = await scanCosts();
+        costScanPromise = scanCosts();
+        const data = await costScanPromise;
         costCache = data;
         costCacheTs = Date.now();
+        costScanPromise = null;
         json(res, 200, data);
       } catch (e) {
+        costScanPromise = null;
         json(res, 500, { error: e?.message ?? String(e) });
       }
       return;
