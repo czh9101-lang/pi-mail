@@ -677,25 +677,11 @@ function emptyCostResult() {
     // assistant messages, and returns aggregated cost data as JSON.
     // Cached with a 5-min TTL; pass ?refresh=1 to force a rescan.
 
-    if (req.method === "GET" && url.pathname === "/api/costs/debug") {
-      const cc = costCache();
-      json(res, 200, {
-        hasCache: !!cc.data,
-        cacheAge: cc.ts ? Math.round((Date.now() - cc.ts) / 1000) : null,
-        ttl: COST_CACHE_TTL / 1000,
-        inFlight: !!cc.promise,
-        generated: cc.data?.generated || null,
-      });
-      return;
-    }
-
     if (req.method === "GET" && url.pathname === "/api/costs") {
       const refresh = url.searchParams.get("refresh") === "1";
       const cc = costCache();
       if (!refresh && cc.data && (Date.now() - cc.ts) < COST_CACHE_TTL) {
-        const cached = { ...cc.data, _cacheHit: true, _cacheAge: Math.round((Date.now() - cc.ts) / 1000) };
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "hit" });
-        res.end(JSON.stringify(cached));
+        json(res, 200, cc.data);
         return;
       }
       // If a scan is in progress, wait for it instead of starting a second one.
@@ -713,10 +699,7 @@ function emptyCostResult() {
         cc.data = data;
         cc.ts = Date.now();
         cc.promise = null;
-        data._cacheHit = false;
-        data._cacheAge = 0;
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "miss" });
-        res.end(JSON.stringify(data));
+        json(res, 200, data);
       } catch (e) {
         cc.promise = null;
         json(res, 500, { error: e?.message ?? String(e) });
