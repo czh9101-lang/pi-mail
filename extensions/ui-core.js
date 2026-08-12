@@ -92,6 +92,20 @@ function fmtTime(ts) {
   const d = new Date(ts);
   return d.toLocaleString();
 }
+function fmtRelative(ts) {
+  if (!ts) return "—";
+  const diff = Date.now() - new Date(ts).getTime();
+  const secs = Math.floor(diff / 1000);
+  if (secs < 0) return fmtTime(ts).split(",")[0]; // future date
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + "h ago";
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return days + "d ago";
+  return fmtTime(ts).split(",")[0]; // fallback to date
+}
 function fmtUptime(registeredAt, now) {
   if (!registeredAt) return "—";
   const s = Math.max(0, Math.round((now - registeredAt) / 1000));

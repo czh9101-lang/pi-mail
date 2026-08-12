@@ -14,7 +14,7 @@ function messageRow(m, opts = {}) {
   head.appendChild(el("span", "meta",
     (opts.showFrom ? "from " + m.fromName + "  ·  " : "") +
     (opts.showTo ? "to " + (m.toName || shortId(m.toId)) + "  ·  " : "") +
-    fmtTime(m.timestamp) + "  ·  id " + shortId(m.id)
+    fmtTime(m.timestamp) + " (" + fmtRelative(m.timestamp) + ")" + "  ·  id " + shortId(m.id)
   ));
   card.appendChild(head);
   card.appendChild(el("div", "body", m.body || "(empty)"));
@@ -185,7 +185,7 @@ function renderMailbox() {
     const row = el("div", "mb-conv-row" + (c.key === mailboxUi.selectedKey ? " active" : ""));
     const nm = el("div", "mb-conv-name", c.label);
     const sn = el("div", "mb-conv-snippet", lastDir + snippet);
-    const ts = el("div", "mb-conv-ts", fmtTime(last.timestamp).split(",")[0]);
+    const ts = el("div", "mb-conv-ts", fmtRelative(last.timestamp));
     row.appendChild(nm); row.appendChild(sn); row.appendChild(ts);
     row.addEventListener("click", () => { mailboxUi.selectedKey = c.key; syncHash(); renderMailbox(); });
     convList.appendChild(row);
