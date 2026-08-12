@@ -677,6 +677,17 @@ function emptyCostResult() {
     // assistant messages, and returns aggregated cost data as JSON.
     // Cached with a 5-min TTL; pass ?refresh=1 to force a rescan.
 
+    if (req.method === "GET" && url.pathname === "/api/costs/debug") {
+      json(res, 200, {
+        hasCache: !!costCache,
+        cacheAge: costCacheTs ? Math.round((Date.now() - costCacheTs) / 1000) : null,
+        ttl: COST_CACHE_TTL / 1000,
+        inFlight: !!costScanPromise,
+        generated: costCache?.generated || null,
+      });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/costs") {
       const refresh = url.searchParams.get("refresh") === "1";
       if (!refresh && costCache && (Date.now() - costCacheTs) < COST_CACHE_TTL) {
