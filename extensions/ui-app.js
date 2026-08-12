@@ -140,15 +140,15 @@ function renderBoard() {
   if (boardUi.newTask.backlog) colPick.disabled = true;
   const blLbl = el("label", null, "backlog"); blLbl.setAttribute("for", "nbl"); blLbl.style.margin = "0";
   blWrap.appendChild(blCb); blWrap.appendChild(blLbl);
-  // Group picker — populated from connected agent project groups
+  // Group picker — hydrated from favorites + spawn history + running agents
   const grpPick = el("select", "agentpick");
   grpPick.title = "Project group";
   grpPick.appendChild((() => { const o = el("option"); o.value = ""; o.textContent = "(no group)"; return o; })());
   const seenGroups = new Set();
-  for (const a of (state.agents || [])) {
-    const g = projectOf(a.cwd);
-    if (!seenGroups.has(g) && g !== "(no project)") { seenGroups.add(g); const o = el("option"); o.value = g; o.textContent = g; grpPick.appendChild(o); }
-  }
+  const addGroupOpt = (g) => { if (!g || seenGroups.has(g) || g === "(no project)") return; seenGroups.add(g); const o = el("option"); o.value = g; o.textContent = g; grpPick.appendChild(o); };
+  for (const f of (state.spawn?.projects?.favorites || [])) addGroupOpt(projectOf(f.cwd));
+  for (const h of (state.spawn?.projects?.history || [])) addGroupOpt(projectOf(h.cwd));
+  for (const a of (state.agents || [])) addGroupOpt(projectOf(a.cwd));
   // Priority picker (task df729d21)
   const priPick = el("select", "agentpick");
   priPick.title = "Priority";
@@ -393,4 +393,159 @@ refresh();
     es.addEventListener("error", () => { /* SSE reconnect is built-in */ });
   } catch { /* SSE not supported — 3s poll fallback is fine */ }
 })();
+// ── Projects dropdown ─────────────────────────────────────────────────────
+// Lists favorited project directories from state.spawn.projects.favorites.
+// Add via inline filesystem browser (reuses /api/spawn/ls) or manual path
+// input; remove via API unfavorite. Re-built fresh every time it opens.
+const projectsBtn = document.getElementById("projects-btn");
+const projUi = { path: "/", dirs: [], loading: false, manualMode: false };
+
+async function projLs(path) {
+  projUi.loading = true; projUi.manualMode = false;
+  refreshProjBrowser();
+  try {
+    const r = await fetch("/api/spawn/ls?path=" + encodeURIComponent(path)).then(r => r.json());
+    if (r.ok) { projUi.path = r.dir; projUi.dirs = r.dirs; }
+    else { projUi.dirs = []; toast("❌ " + (r.error || "ls failed"), true); }
+  } catch (e) { toast("❌ ls failed: " + e.message, true); }
+  projUi.loading = false;
+  refreshProjBrowser();
+}
+function refreshProjBrowser() {
+  const browser = document.getElementById("proj-browser");
+  if (!browser) return;
+  browser.innerHTML = "";
+  // Up button
+  const upBtn = el("button", "btn secondary mini", "↑");
+  upBtn.title = "Go to parent directory";
+  upBtn.disabled = projUi.path === "/";
+  upBtn.addEventListener("click", () => {
+    if (projUi.path !== "/") {
+      const parent = projUi.path.replace(/\/[^/]+\/?$/, "") || "/";
+      projLs(parent);
+    }
+  });
+  browser.appendChild(upBtn);
+  // Current path crumb
+  const crumb = el("span", ""); crumb.style.cssText = "font-size:11px;color:var(--dim);margin-left:6px;word-break:break-all";
+  crumb.textContent = projUi.path;
+  browser.appendChild(crumb);
+  // Dir list
+  const list = el("div", "dir-list"); list.style.cssText = "height:120px;margin-top:4px";
+  if (projUi.loading) list.appendChild(el("div", "dir-empty", "loading…"));
+  else if (!projUi.dirs.length) list.appendChild(el("div", "dir-empty", "(no subdirectories)"));
+  else {
+    for (const d of projUi.dirs) {
+      const b = el("button", "dir-item", "📁 " + d.name);
+      b.title = d.path;
+      b.addEventListener("click", () => projLs(d.path));
+      list.appendChild(b);
+    }
+  }
+  browser.appendChild(list);
+  // Favorite-this-dir button
+  const favRow = el("div", "row"); favRow.style.marginTop = "4px";
+  const isFav = (state.spawn?.projects?.favorites || []).some(f => f.cwd === projUi.path);
+  const favBtn = el("button", "btn secondary mini", isFav ? "★ favorited" : "☆ favorite this dir");
+  favBtn.disabled = projUi.path === "/" || !projUi.path;
+  favBtn.addEventListener("click", async () => {
+    const currently = (state.spawn?.projects?.favorites || []).some(f => f.cwd === projUi.path);
+    const r = await post("/api/spawn/favorite", { cwd: projUi.path, favorite: !currently });
+    if (r.ok) { toast(currently ? "☆ Unfavorited" : "⭐ Favorited"); refresh(); closeProjectsDropdown(); }
+    else toast("❌ " + (r.error || "failed"), true);
+  });
+  favRow.appendChild(favBtn);
+  browser.appendChild(favRow);
+}
+
+function renderProjectsDropdown() {
+  let dd = document.getElementById("projects-dropdown");
+  if (!dd) { dd = el("div", "projects-dropdown"); dd.id = "projects-dropdown"; document.body.appendChild(dd); }
+  dd.innerHTML = "";
+  const favs = state.spawn?.projects?.favorites || [];
+  // Favorites list
+  if (!favs.length) {
+    dd.appendChild(el("div", "proj-empty", "No projects yet — browse below to add one"));
+  } else {
+    for (const f of favs) {
+      const row = el("div", "proj-item");
+      row.title = f.cwd;
+      const name = el("span", "proj-name"); name.textContent = f.cwd.replace(/^.*\//, "");
+      row.appendChild(name);
+      const remove = el("button", "proj-remove", "✖");
+      remove.title = "Remove project";
+      remove.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const r = await post("/api/spawn/favorite", { cwd: f.cwd, favorite: false });
+        if (r.ok) { toast("☆ Unfavorited " + f.cwd); refresh(); closeProjectsDropdown(); }
+        else toast("❌ " + (r.error || "failed"), true);
+      });
+      row.appendChild(remove);
+      dd.appendChild(row);
+    }
+  }
+  // Add section with filesystem browser
+  const add = el("div", "proj-add");
+  const addLabel = el("label", ""); addLabel.style.cssText = "display:block;font-size:12px;color:var(--dim);margin-bottom:4px";
+  addLabel.textContent = "Add a project (pick a dir below or paste a path):";
+  add.appendChild(addLabel);
+  // Manual path input
+  const pathIn = el("input"); pathIn.placeholder = "/absolute/path/to/project"; pathIn.style.marginBottom = "6px";
+  pathIn.value = projUi.manualMode ? projUi.path : "";
+  pathIn.addEventListener("change", () => {
+    const v = pathIn.value.trim();
+    if (v && v !== "/") { projUi.manualMode = true; projLs(v); }
+  });
+  add.appendChild(pathIn);
+  // Inline filesystem browser
+  const browser = el("div"); browser.id = "proj-browser";
+  add.appendChild(browser);
+  dd.appendChild(add);
+  // Populate browser
+  if (!projUi.dirs.length && projUi.path === "/") projLs("/");
+  else refreshProjBrowser();
+}
+function positionProjectsDropdown() {
+  const dd = document.getElementById("projects-dropdown");
+  if (!dd || !projectsBtn) return;
+  const rect = projectsBtn.getBoundingClientRect();
+  dd.style.position = "fixed";
+  dd.style.top = (rect.bottom + 4) + "px";
+  // Right-align to the right edge of the button. On mobile, pin to viewport
+  // edge so the dropdown isn't pushed off-screen.
+  const right = window.innerWidth - rect.right;
+  dd.style.right = Math.max(4, right) + "px";
+  // Keep the dropdown within the viewport: max-width = viewport - 16px
+  dd.style.maxWidth = (window.innerWidth - 16) + "px";
+}
+function openProjectsDropdown() {
+  renderProjectsDropdown();
+  const dd = document.getElementById("projects-dropdown");
+  if (dd) { dd.classList.remove("hidden"); positionProjectsDropdown(); }
+  projectsBtn?.classList.add("active");
+}
+function closeProjectsDropdown() {
+  const dd = document.getElementById("projects-dropdown");
+  if (dd) dd.classList.add("hidden");
+  projectsBtn?.classList.remove("active");
+}
+if (projectsBtn) {
+  projectsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const dd = document.getElementById("projects-dropdown");
+    if (dd && !dd.classList.contains("hidden")) { closeProjectsDropdown(); }
+    else { openProjectsDropdown(); }
+  });
+}
+// Close on outside click
+document.addEventListener("click", (e) => {
+  const dd = document.getElementById("projects-dropdown");
+  if (dd && !dd.classList.contains("hidden") && !dd.contains(e.target) && e.target !== projectsBtn) {
+    closeProjectsDropdown();
+  }
+});
+// Reposition on resize/scroll
+window.addEventListener("resize", () => positionProjectsDropdown());
+window.addEventListener("scroll", () => positionProjectsDropdown(), true);
+
 pollTimer = setInterval(refresh, 3000);

@@ -86,6 +86,37 @@
   nav button:hover { color: var(--text); }
   /* Theme toggle sits at the end of the nav; same styling as nav buttons. */
   .theme-toggle { min-width: 40px; }
+  /* ── Projects dropdown ──────────────────────────────────────────────── */
+  .projects-dropdown {
+    position: absolute; top: 100%; right: 60px; /* right of theme-toggle */
+    width: 340px; max-height: 560px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 200;
+    margin-top: 6px; padding: 8px 0;
+  }
+  .projects-dropdown .proj-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; font-size: 13px; color: var(--text);
+  }
+  .projects-dropdown .proj-item:hover { background: var(--hover); }
+  .projects-dropdown .proj-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .projects-dropdown .proj-remove {
+    background: none; border: none; color: var(--dim); cursor: pointer;
+    font-size: 14px; padding: 2px 4px; border-radius: 4px; line-height: 1;
+  }
+  .projects-dropdown .proj-remove:hover { color: var(--error); background: var(--hover); }
+  .projects-dropdown .proj-empty { padding: 12px; color: var(--dim); font-size: 13px; text-align: center; }
+  .projects-dropdown .proj-add {
+    border-top: 1px solid var(--border); margin-top: 4px; padding: 8px 12px;
+  }
+  .projects-dropdown .proj-add input {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit;
+    font-size: 13px; margin-bottom: 6px;
+  }
+  .projects-dropdown .proj-add .row { display: flex; gap: 6px; align-items: center; }
+  .projects-dropdown .proj-add .btn { font-size: 12px; padding: 5px 10px; min-height: 30px; }
+  .projects-dropdown .proj-add .dir-list { height: 140px; }
   main { flex: 1; overflow: auto; padding: 16px; }
   .hidden { display: none !important; }
 
@@ -125,6 +156,7 @@
   .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
   .btn.broadcast { background: var(--broadcast); color: var(--on-accent); }
   .btn:disabled { opacity: .5; cursor: default; }
+  .btn.mini { padding: 4px 9px; min-height: 28px; font-size: 12px; }
   .checkbox { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 13px; }
   /* Always-visible recipient picker — <datalist> renders nothing on iOS Safari */
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
