@@ -680,7 +680,8 @@ function emptyCostResult() {
     if (req.method === "GET" && url.pathname === "/api/costs") {
       const refresh = url.searchParams.get("refresh") === "1";
       if (!refresh && costCache && (Date.now() - costCacheTs) < COST_CACHE_TTL) {
-        json(res, 200, costCache);
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "hit" });
+        res.end(JSON.stringify(costCache));
         return;
       }
       // If a scan is in progress, wait for it instead of starting a second one.
@@ -698,7 +699,8 @@ function emptyCostResult() {
         costCache = data;
         costCacheTs = Date.now();
         costScanPromise = null;
-        json(res, 200, data);
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "X-Cost-Cache": "miss" });
+        res.end(JSON.stringify(data));
       } catch (e) {
         costScanPromise = null;
         json(res, 500, { error: e?.message ?? String(e) });
