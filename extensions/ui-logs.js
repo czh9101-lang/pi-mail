@@ -80,6 +80,7 @@ function eventPreview(line) {
 }
 
 function renderLogs() {
+  const prevMainTop = main.scrollTop;
   main.innerHTML = "";
   const card = el("div", "card");
   card.appendChild(el("h2", null, "📜 Session logs"));
@@ -174,4 +175,5 @@ function renderLogs() {
     card.appendChild(body);
   }
   main.appendChild(card);
+  main.scrollTop = prevMainTop;
 }

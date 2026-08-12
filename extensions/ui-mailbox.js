@@ -104,6 +104,10 @@ function renderMailbox() {
   // an unrelated slice of state (agent status, board, new mail) changes.
   const prevList = main.querySelector(".mb-conv-list");
   const prevTop = prevList ? prevList.scrollTop : 0;
+  // Preserve the right pane scroll position too (the thread view) so
+  // reading a long email isn't thrown back to the top every 3s.
+  const prevRight = main.querySelector(".mb-right");
+  const prevRightTop = prevRight ? prevRight.scrollTop : 0;
   main.innerHTML = "";
   const grid = el("div", "mb-grid");
 
@@ -224,6 +228,8 @@ function renderMailbox() {
     grid.appendChild(right);
     main.appendChild(grid);
     convList.scrollTop = prevTop;
+    const rightPane = main.querySelector(".mb-right");
+    if (rightPane) rightPane.scrollTop = prevRightTop;
     return;
   }
 
@@ -326,6 +332,8 @@ function renderMailbox() {
   grid.appendChild(right);
   main.appendChild(grid);
   convList.scrollTop = prevTop;
+  const rightPane = main.querySelector(".mb-right");
+  if (rightPane) rightPane.scrollTop = prevRightTop;
 }
 
 /** Conversation key for a single message: the peer agent id for human↔agent

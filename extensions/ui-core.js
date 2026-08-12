@@ -360,6 +360,7 @@ function sortAgents(list) {
 }
 
 function renderAgents() {
+  const prevMainTop = main.scrollTop;
   main.innerHTML = "";
   const card = el("div", "card");
   card.appendChild(el("h2", null, "Connected agents"));
@@ -442,5 +443,6 @@ function renderAgents() {
   }
   table.appendChild(tbody); wrap.appendChild(table); card.appendChild(wrap);
   main.appendChild(card);
+  main.scrollTop = prevMainTop;
 }
 

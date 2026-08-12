@@ -1,5 +1,10 @@
 "use strict";
 function renderBoard() {
+  // Preserve scroll positions across the 3s poll re-render.
+  const prevMainTop = main.scrollTop;
+  const prevBoard = main.querySelector(".board");
+  const prevBoardLeft = prevBoard ? prevBoard.scrollLeft : 0;
+
   main.innerHTML = "";
   const board = state.board;
   if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
@@ -216,6 +221,11 @@ function renderBoard() {
 
   // Keep the task detail modal live across the 3s poll re-render.
   renderTaskModal();
+
+  // Restore scroll positions
+  main.scrollTop = prevMainTop;
+  const boardEl = main.querySelector(".board");
+  if (boardEl) boardEl.scrollLeft = prevBoardLeft;
 }
 
 // ── Backlog tab (daa0148b) ─────────────────────────────────────────────────
@@ -223,6 +233,7 @@ function renderBoard() {
 // column). Cards can be dragged onto columns, or moved via their dropdown.
 // Includes a quick-create input so items can be added straight to the backlog.
 function renderBacklog() {
+  const prevMainTop = main.scrollTop;
   main.innerHTML = "";
   const board = state.board;
   if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
@@ -270,20 +281,24 @@ function renderBacklog() {
   main.appendChild(bl);
 
   renderTaskModal();
+  main.scrollTop = prevMainTop;
 }
 
 // ── Settings tab (0f3b5549) ────────────────────────────────────────────────
 // Board + Jira + MM + CEO + columns configuration on its own dedicated tab.
 // The settings card is shared (boardSettingsCard), defined in ui-board.js.
 async function renderSettings() {
+  const prevMainTop = main.scrollTop;
   main.innerHTML = "";
   await ensureBoardCfg();
   const board = state.board;
   if (!board) { main.appendChild(el("div", "empty", "Board not available (daemon too old? restart with /restart-mail-daemon).")); return; }
   main.appendChild(boardSettingsCard({ ...board, _cfg: boardCfgCache.cfg?.config, _cfgColumns: boardCfgCache.cfg?.columns }));
+  main.scrollTop = prevMainTop;
 }
 
 function renderHistory() {
+  const prevMainTop = main.scrollTop;
   main.innerHTML = "";
   const card = el("div", "card");
   card.appendChild(el("h2", null, "Mail history per agent"));
@@ -313,6 +328,7 @@ function renderHistory() {
   }
   card.appendChild(list);
   main.appendChild(card);
+  main.scrollTop = prevMainTop;
 
   pick.addEventListener("change", () => { historyAgentId = pick.value; syncHash(); const p = loadHistoryPage(historyAgentId); render(); p.then(render); });
 }
