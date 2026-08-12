@@ -341,7 +341,7 @@ function renderHistory() {
 // pushes the hash; the hashchange listener handles navigations that arrive
 // from outside setTab (back/forward, initial deep-link) and no-ops when the
 // hash already matches in-memory state (no render loop).
-const VALID_TABS = ["agents", "board", "backlog", "mailbox", "history", "settings", "logs"];
+const VALID_TABS = ["agents", "board", "backlog", "mailbox", "history", "costs", "settings", "logs"];
 
 function routeFor(tab, agentId) {
   if (tab === "history" && agentId) return "history/" + agentId;

@@ -354,6 +354,7 @@ function render() {
   else if (currentTab === "board") renderBoard();
   else if (currentTab === "backlog") renderBacklog();
   else if (currentTab === "mailbox") renderMailbox();
+  else if (currentTab === "costs") { if (!costsUi.data && !costsUi.loading) { loadCosts(false).then(renderCosts); } else renderCosts(); }
   else if (currentTab === "settings") renderSettings();
   else if (currentTab === "history") renderHistory();
   else if (currentTab === "logs") { loadLogs().then(renderLogs); }

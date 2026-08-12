@@ -419,3 +419,33 @@
   .logs-event-full pre { margin: 0; padding: 6px 8px; background: var(--bg);
     border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; color: var(--body-text); }
+
+  /* ── Costs tab ───────────────────────────────────────────────────── */
+  .costs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .cost-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; gap: 12px; align-items: center; }
+  .cost-card-icon { font-size: 24px; flex: 0 0 auto; }
+  .cost-card-val { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
+  .cost-card-lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+  .cost-card-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .cost-section { margin-top: 20px; }
+  .cost-section h3 { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .cost-chart { display: flex; flex-direction: column; gap: 6px; }
+  .cost-bar-row { display: flex; align-items: center; gap: 8px; }
+  .cost-bar-label { width: 140px; min-width: 60px; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; flex: 0 0 auto; }
+  .cost-bar-wrap { flex: 1; min-width: 0; background: var(--bg); border-radius: 6px; overflow: hidden; }
+  .cost-bar { display: flex; align-items: center; gap: 8px; height: 28px; border-radius: 6px; padding: 0 8px; min-width: fit-content; background: var(--accent); transition: width .3s ease; }
+  .cost-bar-val { font-size: 12px; font-weight: 600; color: var(--on-accent); white-space: nowrap; }
+  .cost-bar-sub { font-size: 11px; color: var(--on-accent); opacity: .85; white-space: nowrap; }
+  .cost-bar-tail { font-size: 12px; color: var(--dim); min-width: 60px; text-align: right; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  /* Sparkline daily trend */
+  .cost-spark { display: flex; align-items: flex-end; gap: 2px; height: 140px; padding: 4px 0; }
+  .cost-spark-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+  .cost-spark-bar { width: 100%; max-width: 20px; min-height: 1px; border-radius: 3px 3px 0 0; background: var(--accent); transition: height .3s ease; }
+  .cost-spark-lbl { font-size: 9px; color: var(--muted); margin-top: 4px; white-space: nowrap; }
+  @media (max-width: 640px) {
+    .costs-grid { grid-template-columns: 1fr 1fr; }
+    .cost-card-val { font-size: 18px; }
+    .cost-bar-label { width: 80px; font-size: 11px; }
+    .cost-bar-tail { display: none; }
+    .cost-spark-lbl { font-size: 8px; }
+  }

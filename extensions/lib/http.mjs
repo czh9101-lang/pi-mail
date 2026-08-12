@@ -10,6 +10,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import readline from "node:readline";
 import {
   messageLog,
   messagePage,
@@ -66,6 +67,7 @@ const UI_ASSET_TYPES = {
   "/ui-terminal.js": "text/javascript; charset=utf-8",
   "/ui-mailbox.js": "text/javascript; charset=utf-8",
   "/ui-logs.js": "text/javascript; charset=utf-8",
+  "/ui-costs.js": "text/javascript; charset=utf-8",
   "/ui-app.js": "text/javascript; charset=utf-8",
 };
 
@@ -433,7 +435,133 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       return;
     }
 
-    // ── Session logs endpoints ────────────────────────────────────────────
+    // ── Cost aggregation cache ────────────────────────────────────────────
+
+let costCache = null;
+let costCacheTs = 0;
+const COST_CACHE_TTL = 5 * 60_000; // 5 min
+
+function round(n) { return Math.round(n * 10000) / 10000; }
+
+async function scanCosts() {
+  const sessionsDir = path.join(AGENT_DIR, "sessions");
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 7) + "-01";
+
+  let allTimeCost = 0, monthCost = 0, todayCost = 0;
+  let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
+  const projectCost = new Map();
+  const modelCost = new Map();
+  const dateCost = new Map();
+
+  // Find all JSONL session files
+  const files = [];
+  try {
+    const groups = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    for (const g of groups) {
+      if (!g.isDirectory()) continue;
+      const groupDir = path.join(sessionsDir, g.name);
+      let entries;
+      try { entries = fs.readdirSync(groupDir); } catch { continue; }
+      for (const f of entries) {
+        if (!f.endsWith(".jsonl")) continue;
+        files.push({ project: g.name, path: path.join(groupDir, f) });
+      }
+    }
+  } catch { return emptyCostResult(); }
+
+  if (!files.length) return emptyCostResult();
+
+  // Stream through each file and extract usage blocks from assistant messages.
+  // Uses readline for memory efficiency on large files.
+  for (const { project, path: fp } of files) {
+    let fileDate = null;
+    const dm = fp.match(/(\d{4}-\d{2}-\d{2})T/);
+    if (dm) fileDate = dm[1];
+
+    const rl = readline.createInterface({
+      input: fs.createReadStream(fp, { encoding: "utf8" }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      if (!line || !line.includes('"usage"')) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.message?.role !== "assistant") continue;
+        const usage = msg.message?.usage;
+        if (!usage?.cost?.total) continue;
+        const cost = usage.cost.total;
+        const model = msg.message?.model || "unknown";
+
+        allTimeCost += cost;
+        totalInput += usage.input || 0;
+        totalOutput += usage.output || 0;
+        totalCacheRead += usage.cacheRead || 0;
+        totalCacheWrite += usage.cacheWrite || 0;
+
+        if (fileDate >= monthStart) monthCost += cost;
+        if (fileDate === today) todayCost += cost;
+
+        // By project
+        const p = projectCost.get(project) || { cost: 0, tokens: 0, calls: 0 };
+        p.cost += cost;
+        p.tokens += usage.totalTokens || 0;
+        p.calls++;
+        projectCost.set(project, p);
+
+        // By model
+        const m = modelCost.get(model) || { cost: 0, tokens: 0, calls: 0 };
+        m.cost += cost;
+        m.tokens += usage.totalTokens || 0;
+        m.calls++;
+        modelCost.set(model, m);
+
+        // By date
+        if (fileDate) {
+          const d = dateCost.get(fileDate) || 0;
+          dateCost.set(fileDate, d + cost);
+        }
+      } catch { /* skip unparseable lines */ }
+    }
+  }
+
+  return {
+    totals: {
+      allTime: round(allTimeCost),
+      thisMonth: round(monthCost),
+      today: round(todayCost),
+    },
+    totalTokens: {
+      input: totalInput,
+      output: totalOutput,
+      cacheRead: totalCacheRead,
+      cacheWrite: totalCacheWrite,
+      total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+    },
+    byProject: [...projectCost.entries()].map(([project, v]) => ({
+      project, cost: round(v.cost), tokens: v.tokens, calls: v.calls,
+    })).sort((a, b) => b.cost - a.cost),
+    byModel: [...modelCost.entries()].map(([model, v]) => ({
+      model, cost: round(v.cost), tokens: v.tokens, calls: v.calls,
+    })).sort((a, b) => b.cost - a.cost),
+    byDate: [...dateCost.entries()].map(([date, cost]) => ({
+      date, cost: round(cost),
+    })).sort((a, b) => a.date.localeCompare(b.date)),
+    generated: new Date().toISOString(),
+  };
+}
+
+function emptyCostResult() {
+  return {
+    totals: { allTime: 0, thisMonth: 0, today: 0 },
+    totalTokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    byProject: [], byModel: [], byDate: [],
+    generated: new Date().toISOString(),
+  };
+}
+
+// ── Session logs endpoints ────────────────────────────────────────────
     // List recent pi session log files from ~/.pi/agent/sessions/. Each entry
     // is a JSONL file; the api returns a sorted list (newest first) with
     // project group, timestamp, size, and a path for content retrieval.
@@ -540,6 +668,28 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
       if (!body.threadId || typeof body.threadId !== "string") { json(res, 400, { ok: false, error: "Missing 'threadId'" }); return; }
       const r = await chatGet({ threadId: body.threadId, timeoutMs: body.timeoutMs });
       json(res, 200, r.error ? { ok: false, error: r.error } : { ok: true, ...r });
+      return;
+    }
+
+    // ── Cost aggregation endpoint ────────────────────────────────────────
+    // Scans ~/.pi/agent/sessions/ JSONL files, parses usage blocks from
+    // assistant messages, and returns aggregated cost data as JSON.
+    // Cached with a 5-min TTL; pass ?refresh=1 to force a rescan.
+
+    if (req.method === "GET" && url.pathname === "/api/costs") {
+      const refresh = url.searchParams.get("refresh") === "1";
+      if (!refresh && costCache && (Date.now() - costCacheTs) < COST_CACHE_TTL) {
+        json(res, 200, costCache);
+        return;
+      }
+      try {
+        const data = await scanCosts();
+        costCache = data;
+        costCacheTs = Date.now();
+        json(res, 200, data);
+      } catch (e) {
+        json(res, 500, { error: e?.message ?? String(e) });
+      }
       return;
     }
 
