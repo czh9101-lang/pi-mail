@@ -52,6 +52,7 @@ import { handleMcpRequest, jsonRpcError } from "./http-mcp.mjs";
 import { chatPost, chatGet, chatState } from "./chat.mjs";
 import { attachTerminalUpgrade } from "./http-terminal.mjs";
 import { sseEvents } from "./sse-events.mjs";
+import { availableModels, currentProvider } from "./models.mjs";
 
 /** Static UI assets served from the extension dir. The filename for each
  *  route is the pathname without the leading slash (e.g. "/ui.css" ->
@@ -187,6 +188,14 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
 
     if (req.method === "GET" && url.pathname === "/api/state") {
       json(res, 200, federationState());
+      return;
+    }
+
+    // Available models for the current provider (task 46c60a81). The web UI's
+    // task create/edit model dropdown is hydrated from this endpoint. Shape:
+    // [{ id: "provider/slug", name: "Friendly name", provider: "provider" }].
+    if (req.method === "GET" && url.pathname === "/api/models") {
+      json(res, 200, { provider: currentProvider(), models: availableModels() });
       return;
     }
 

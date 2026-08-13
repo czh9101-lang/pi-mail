@@ -162,6 +162,9 @@ function renderBoard() {
     const o = el("option"); o.value = p; o.textContent = p; if (p === (boardUi.newTask.priority || "")) o.selected = true; priPick.appendChild(o);
   }
   priPick.addEventListener("change", () => boardUi.newTask.priority = priPick.value);
+  // Model picker (task 46c60a81) — per-task model override.
+  const modelPick = modelSelect(boardUi.newTask.model || "", (v) => boardUi.newTask.model = v);
+  modelPick.title = "Model for this task";
   const addBtn = el("button", "btn", "Add task");
   addBtn.addEventListener("click", async () => {
     const summary = boardUi.newTask.summary.trim();
@@ -170,12 +173,13 @@ function renderBoard() {
     if (!boardUi.newTask.backlog) payload.column = colPick.value;
     if (grpPick.value) payload.group = grpPick.value;
     if (priPick.value) payload.priority = priPick.value;
+    if (boardUi.newTask.model) payload.model = boardUi.newTask.model;
     const desc = boardUi.newTask.description.trim();
     if (desc) payload.description = desc;
     const r = await boardPost("/api/board/create", payload, "Task created");
-    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; boardUi.newTask.priority = ""; inSum.value = ""; inDesc.value = ""; }
+    if (r.ok) { boardUi.newTask.summary = ""; boardUi.newTask.description = ""; boardUi.newTask.priority = ""; boardUi.newTask.model = ""; inSum.value = ""; inDesc.value = ""; }
   });
-  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(grpPick); nt.appendChild(priPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
+  nt.appendChild(inSum); nt.appendChild(inDesc); nt.appendChild(lvlPick); nt.appendChild(colPick); nt.appendChild(grpPick); nt.appendChild(priPick); nt.appendChild(modelPick); nt.appendChild(blWrap); nt.appendChild(addBtn);
   main.appendChild(nt);
 
   // Kanban columns

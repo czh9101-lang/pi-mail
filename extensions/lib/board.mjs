@@ -64,6 +64,7 @@ export const DEFAULT_COLUMNS = [
  *             level: "epic" | "story" | "task" | "subtask",
  *             epicId?: string | null,
  *             group?: string | null,
+ *             model?: string | null,
  *             activity: Array<{ ts: number, who: string, text: string, kind?: string }> }} BoardTask
  *
  * parentId/parentKey — subtask linkage (board id and Jira key of the parent).
@@ -94,6 +95,11 @@ export const DEFAULT_COLUMNS = [
  *         re-stamped on assignment (assignee's group). When unset, derived
  *         live from the assignee's cwd basename. Drives same-group-only
  *         visibility for agents; the human operator sees every group.
+ * model — optional per-task model override (e.g.
+ *         "openrouter/deepseek/deepseek-v4-pro"). Applied at dispatch: a
+ *         worker spawned for the task is started with --model, and an
+ *         already-running worker is switched via set_model. Unset = worker
+ *         default.
  */
 export let board = {
   config: {

@@ -36,6 +36,7 @@ export function taskMailBody(task, column, actorName) {
     }`,
   ];
   if (task.url) lines.push(`Jira: ${task.url}`);
+  if (task.model) lines.push(`Model: ${task.model} (this task runs on a specific model)`);
   if (task.parentKey || task.parentId) {
     const parent = board.tasks.find((t) => t.id === task.parentId || (task.parentKey && t.key === task.parentKey));
     lines.push(`Subtask of: ${task.parentKey ?? parent?.id.slice(0, 8) ?? "?"}${parent ? ` — ${parent.summary}` : ""}`);

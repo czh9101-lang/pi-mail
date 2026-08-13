@@ -20,7 +20,8 @@ export function taskLine(t: BoardTask): string {
   const loc = t.location === "backlog" ? ` [backlog]` : t.location === "archive" ? ` [archive]` : "";
   const grp = t.group ? ` ⟨${t.group}⟩` : "";
   const flag = t.flagged ? ` ⚠unclear` : "";
-  return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${lvl}${loc}${grp}${flag}`;
+  const mdl = t.model ? ` 🤖${t.model}` : "";
+  return `  • [${t.id.slice(0, 8)}] ${key}${t.summary}${who}${status}${sub}${lvl}${loc}${grp}${mdl}${flag}`;
 }
 
 /** Filters for board_list_tasks, mirroring the agent tool's parameters. */
@@ -105,6 +106,7 @@ export function renderTask(t: BoardTask, b: BoardState): string {
     `Assignee: ${t.assignee ?? "—"}`,
     `Group:    ${t.group ?? "—"}${t.assignee ? "" : " (none — visible to all groups)"}`,
     `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
+    ...(t.model ? [`Model:    ${t.model}`] : []),
     ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
     ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
     ...(t.url ? [`Jira:     ${t.url}`] : []),

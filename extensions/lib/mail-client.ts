@@ -66,6 +66,8 @@ export class MailClient {
 
   /** Called when a push notification arrives */
   onNewMail: ((msg: MailMessage) => void) | null = null;
+  /** Called when the daemon pushes a model switch (set_model) for a task. */
+  onSetModel: ((model: string) => void) | null = null;
   /** Called when the socket closes (cleanly or on error) */
   onDisconnect: (() => void) | null = null;
 
@@ -109,6 +111,14 @@ export class MailClient {
           if (msg.type === "new_mail") {
             // Run async so the socket data handler is never blocked by callback work
             setImmediate(() => this.onNewMail?.(msg.message as MailMessage));
+            continue;
+          }
+
+          // Daemon → agent push: switch to the model required by an assigned
+          // task. Best-effort (the callback resolves the model and switches;
+          // failures are swallowed by the consumer).
+          if (msg.type === "set_model") {
+            setImmediate(() => this.onSetModel?.(String(msg.model ?? "")));
             continue;
           }
 

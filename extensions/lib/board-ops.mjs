@@ -8,6 +8,8 @@ import {
   HUMAN_AGENT_ID,
   HUMAN_AGENT_NAME,
   agentDisplayName,
+  agents,
+  send,
   log,
   sendMail,
   resolveTarget,
@@ -206,6 +208,19 @@ export async function boardAssign(actorId, taskSpec, assignee, newSession) {
       const w = `Jira assignee update failed: ${e.message}`;
       taskActivity(task, "board", w);
       if (!warning) warning = w;
+    }
+  }
+  // Per-task model override (task 46c60a81): when the task carries a model
+  // and the assignee resolves to a LIVE agent, push a set_model message to
+  // that worker so it switches to the task's model before starting work.
+  // Unset model = worker keeps its current/default model. A worker spawned
+  // fresh for the task is started with --model (see spawn.mjs); this push
+  // path covers an already-running worker.
+  if (task.model && targetId) {
+    const agent = agents.get(targetId);
+    if (agent) {
+      setImmediate(() => send(agent.conn, { type: "set_model", model: task.model }));
+      log(`Dispatch: switching ${task.assignee} to model ${task.model} for task ${task.id.slice(0, 8)}`);
     }
   }
   schedulePersistBoard();

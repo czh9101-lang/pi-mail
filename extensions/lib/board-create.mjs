@@ -32,7 +32,7 @@ import {
  * the parent is a Jira issue (or `inJira` is set), a real Jira issue is
  * created too and kept in sync (pinned, so it survives JQL filtering).
  */
-export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog, group, priority } = {}) {
+export async function boardCreate(actorId, { summary, description, column, parent, inJira, level, epicId, backlog, group, priority, model } = {}) {
   const s = String(summary ?? "").trim();
   if (!s) return { error: "Summary is required" };
   const parentTask = parent ? findBoardTask(parent) : null;
@@ -78,6 +78,9 @@ export async function boardCreate(actorId, { summary, description, column, paren
     location: toBacklog ? "backlog" : "board",
     level: finalLevel,
     epicId: epicRef,
+    // Per-task model override (e.g. "openrouter/deepseek/deepseek-v4-pro").
+    // Empty/unset means the worker's default model. Applied at dispatch.
+    model: model ? String(model).trim() : null,
     // Stamp the owning group: subtasks inherit their parent's group, otherwise
     // the creator's project group (human-created tasks get null here and are
     // (re)stamped when assigned to an agent).
@@ -125,7 +128,7 @@ export async function boardCreate(actorId, { summary, description, column, paren
   return { ok: true, task };
 }
 
-export async function boardUpdate(actorId, taskSpec, { summary, description, group, priority } = {}) {
+export async function boardUpdate(actorId, taskSpec, { summary, description, group, priority, model } = {}) {
   const task = findBoardTask(taskSpec);
   if (!task) return { error: `Task '${taskSpec}' not found` };
   const actor = agentDisplayName(actorId);
@@ -159,7 +162,20 @@ export async function boardUpdate(actorId, taskSpec, { summary, description, gro
       changes.push("priority (cleared)");
     }
   }
-  if (!changes.length) return { error: "Nothing to update (pass summary, description, priority, and/or group)" };
+  // model: pass a "provider/model" string, or an empty string to clear. A
+  // bare model slug (no provider prefix) is stored as-is so a custom value
+  // can be set before the model list is known.
+  if (typeof model === "string") {
+    const m = model.trim();
+    if (m) {
+      task.model = m;
+      changes.push(`model → ${m}`);
+    } else {
+      task.model = null;
+      changes.push("model (cleared)");
+    }
+  }
+  if (!changes.length) return { error: "Nothing to update (pass summary, description, priority, group, and/or model)" };
   let warning;
   if (task.origin === "jira" && jiraPushOk()) {
     try {

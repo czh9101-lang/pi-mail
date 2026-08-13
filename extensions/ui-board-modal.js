@@ -61,6 +61,11 @@ function renderTaskModal() {
   if (t.jiraStatus) meta.appendChild(el("span", "badge jira", t.jiraStatus));
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
   if (t.priority) meta.appendChild(el("span", "badge pri-" + t.priority, "🔺 " + t.priority));
+  if (t.model) {
+    const mb = el("span", "badge sub", "🤖 " + modelDisplay(t.model));
+    mb.title = t.model;
+    meta.appendChild(mb);
+  }
   const mg = taskGroup(t);
   if (mg && mg !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + mg + "⟩"));
   if (t.flagged) {
@@ -203,6 +208,10 @@ function renderTaskModal() {
     boardPost("/api/board/update", { taskId: t.id, priority }, "Priority → " + (priority || "none")).then(r => { if (r.ok) closeTaskModal(); });
   });
   actions.appendChild(pp);
+  // Model change dropdown (task 46c60a81) — per-task model override.
+  actions.appendChild(modelSelect(t.model || "", (model) => {
+    boardPost("/api/board/update", { taskId: t.id, model }, "Model " + (model || "cleared"));
+  }));
   // Assign select
   const as = el("select");
   const optNone = el("option"); optNone.value = ""; optNone.textContent = "→ assign…"; as.appendChild(optNone);

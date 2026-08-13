@@ -226,6 +226,11 @@ function taskCard(t, board) {
   if (t.origin === "local") meta.appendChild(el("span", "badge custom", "local"));
   if (t.level && t.level !== "task") meta.appendChild(el("span", "badge sub", t.level));
   if (t.priority) meta.appendChild(el("span", "badge pri-" + t.priority, "🔺 " + t.priority));
+  if (t.model) {
+    const mb = el("span", "badge sub", "🤖 " + modelDisplay(t.model));
+    mb.title = t.model;
+    meta.appendChild(mb);
+  }
   const g = taskGroup(t);
   if (g && g !== "(no project)") meta.appendChild(el("span", "badge sub", "⟨" + g + "⟩"));
 

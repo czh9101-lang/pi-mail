@@ -193,6 +193,25 @@ export default function (pi: ExtensionAPI) {
         scheduleReconnect();
       };
 
+      // Daemon push: an assigned task requires a specific model. Resolve the
+      // "provider/slug" string to a Model and switch to it (best-effort — an
+      // unknown model or missing API key leaves the current model untouched).
+      client.onSetModel = (modelStr: string) => {
+        try {
+          const slash = (modelStr || "").indexOf("/");
+          if (slash < 0) return;
+          const provider = modelStr.slice(0, slash);
+          const modelId = modelStr.slice(slash + 1);
+          const ctx = latestCtx;
+          const model = ctx?.modelRegistry?.find(provider, modelId);
+          if (!model) return;
+          // Fire-and-forget: the model applies to the next agent turn.
+          pi.setModel(model).catch(() => {});
+        } catch {
+          // best-effort model switch; ignore failures
+        }
+      };
+
       // Register with the daemon
       const resp = await client.request<{ type: string; agentId?: string }>({
         type: "register",

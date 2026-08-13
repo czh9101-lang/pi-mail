@@ -135,6 +135,7 @@ export function registerBoardReadTools(pi: ExtensionAPI, ctx: BoardToolCtx): voi
           `Assignee: ${t.assignee ?? "—"}`,
           `Group:    ${t.group ?? "—"}${t.assignee ? "" : " (none — visible to all groups)"}`,
           `Origin:   ${t.origin}${t.jiraStatus ? ` | Jira status: ${t.jiraStatus}` : ""}${t.priority ? ` | Priority: ${t.priority}` : ""}${t.issueType ? ` | Type: ${t.issueType}` : ""}`,
+          ...(t.model ? [`Model:    ${t.model}`] : []),
           ...(t.parentKey || t.parentId ? [`Parent:   ${t.parentKey ?? t.parentId?.slice(0, 8)}`] : []),
           ...(t.flagged ? [`⚠ FLAGGED UNCLEAR by ${t.flagged.by}: ${t.flagged.reason}`] : []),
           ...(t.url ? [`Jira:     ${t.url}`] : []),

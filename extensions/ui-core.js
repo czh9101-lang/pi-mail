@@ -323,6 +323,10 @@ async function refresh() {
     // dragged element and drop-target highlights aren't rebuilt mid-drag.
     const dragging = !!boardUi.dragTaskId;
     const sig = JSON.stringify([state.agents, state.messages, state.board]);
+    // Model list for the task create/edit dropdown (task 46c60a81). Cached,
+    // so this is a no-op after the first fetch. Await so the first board
+    // render already has the catalog (a missing dropdown is confusing).
+    await loadModels();
     if (focusedInMain || focusedInModal || dragging) { lastSig = sig; return; }
     if (sig !== lastSig) {
       lastSig = sig;
@@ -346,6 +350,59 @@ async function post(path, payload) {
     body: JSON.stringify(payload),
   });
   return r.json().catch(() => ({ ok: false, error: "invalid response" }));
+}
+
+// ── Model list (task 46c60a81) ────────────────────────────────────────────
+// The task create/edit model dropdown is hydrated from GET /api/models, which
+// returns `{ provider, models: [{ id: "provider/slug", name, provider }] }`.
+// Cached for the life of the page; the list changes rarely (only when the
+// operator edits models.json / provider catalogs), so it's fetched once.
+let modelsCache = null;
+async function loadModels() {
+  if (modelsCache) return modelsCache;
+  try {
+    const r = await fetch("/api/models", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    modelsCache = await r.json();
+  } catch {
+    modelsCache = { provider: null, models: [] };
+  }
+  return modelsCache;
+}
+
+/** Friendly label for a model id: the catalog's `name` when known, else the
+ *  raw id. Never throws (used in card/modal rendering). */
+function modelDisplay(model) {
+  if (!model) return "";
+  const m = (modelsCache?.models || []).find((x) => x.id === model);
+  return m ? (m.name || m.id) : model;
+}
+
+/** A model <select>: blank "Default" option, the catalog's models, the
+ *  currently-set model if it's not in the catalog (custom value), and a
+ *  "Custom…" free-text fallback. `onChange(value)` is called with the chosen
+ *  model id ("" for default); the select re-selects the current value after a
+ *  custom prompt so re-renders stay consistent. */
+function modelSelect(selected, onChange) {
+  const sel = el("select");
+  sel.className = "agentpick";
+  sel.title = "Model for this task (Default = worker's model)";
+  const opt = (val, label, isSel) => { const o = el("option"); o.value = val; o.textContent = label; if (isSel) o.selected = true; return o; };
+  sel.appendChild(opt("", "Default", !selected));
+  const models = (modelsCache?.models || []);
+  for (const m of models) sel.appendChild(opt(m.id, m.name || m.id, m.id === selected));
+  if (selected && !models.some((m) => m.id === selected)) sel.appendChild(opt(selected, selected, true));
+  sel.appendChild(opt("__custom__", "Custom…", false));
+  sel.addEventListener("change", () => {
+    if (sel.value === "__custom__") {
+      const v = prompt("Model (provider/model, e.g. anthropic/claude-sonnet-4):", selected || "");
+      if (v !== null && v.trim()) onChange(v.trim());
+      sel.value = selected || "";
+      return;
+    }
+    onChange(sel.value);
+  });
+  return sel;
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────

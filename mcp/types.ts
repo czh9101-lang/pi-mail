@@ -66,6 +66,8 @@ export interface BoardTask {
   epicId?: string | null;
   /** Project group that owns this task (cwd basename, e.g. "reader"). */
   group?: string | null;
+  /** Per-task model override (e.g. "openrouter/deepseek/deepseek-v4-pro"). */
+  model?: string | null;
 }
 
 /** Response from GET /api/board — the whole board state. */
@@ -124,6 +126,8 @@ export interface CreateTaskBody {
   backlog?: boolean;
   /** Project group name for the task (omit for ungrouped/current behavior). */
   group?: string;
+  /** Per-task model override (e.g. "openrouter/deepseek/deepseek-v4-pro"). */
+  model?: string;
 }
 
 /** Shape of the update-task body (mirrors POST /api/board/update). */
@@ -132,6 +136,8 @@ export interface UpdateTaskBody {
   description?: string;
   /** Project group for the task (empty string to clear, omit to leave unchanged). */
   group?: string;
+  /** Per-task model override (empty string to clear, omit to leave unchanged). */
+  model?: string;
 }
 
 // ── MCP project chat ─────────────────────────────────────────────────────────

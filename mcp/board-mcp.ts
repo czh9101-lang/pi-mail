@@ -203,10 +203,11 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       epicId: z.string().optional().describe("Board id/prefix of the epic a story belongs to"),
       backlog: z.boolean().optional().describe("Create in the Backlog pool (off-board, local-only) instead of a column"),
       group: z.string().optional().describe("Project group name for the task (omit for ungrouped/current behavior)"),
+      model: z.string().optional().describe("Per-task model override, e.g. 'openrouter/deepseek/deepseek-v4-pro' (omit for the worker's default)"),
     },
-    async ({ summary, description, column, parent, inJira, level, epicId, backlog, group }) => {
+    async ({ summary, description, column, parent, inJira, level, epicId, backlog, group, model }) => {
       try {
-        const resp: BoardOpResponse = await http.createTask({ summary, description, column, parent, inJira, level, epicId, backlog, group });
+        const resp: BoardOpResponse = await http.createTask({ summary, description, column, parent, inJira, level, epicId, backlog, group, model });
         const id = (resp.taskId ?? resp.task?.id ?? "?").slice(0, 8);
         const key = resp.key ?? resp.task?.key;
         const jiraNote = key ? ` (Jira: ${key})` : "";
@@ -268,10 +269,11 @@ export function createBoardMcpServer(backend: BoardBackend = httpBackend): McpSe
       summary: z.string().optional().describe("New summary"),
       description: z.string().optional().describe("New description"),
       group: z.string().optional().describe("Project group for the task (empty string to clear, omit to leave unchanged)"),
+      model: z.string().optional().describe("Per-task model override (empty string to clear, omit to leave unchanged)"),
     },
-    async ({ taskId, summary, description, group }) => {
+    async ({ taskId, summary, description, group, model }) => {
       try {
-        const resp = await http.updateTask(taskId, { summary, description, group });
+        const resp = await http.updateTask(taskId, { summary, description, group, model });
         return ok(renderOpResult(resp, `Updated ${taskId}`));
       } catch (e) {
         return toolError(e);
