@@ -108,7 +108,7 @@ export function notifyAssignee(actorId, task, subjectPrefix, opts = {}) {
  */
 export function nudgeIdleTasks() {
   if (board.config.nudgeEnabled === false) return;
-  const intervalMs = Math.max(1, (board.config.nudgeIntervalMin ?? 30)) * 60_000;
+  const intervalMs = Math.max(1, (board.config.nudgeIntervalMin ?? 60)) * 60_000;
   const now = Date.now();
   for (const task of board.tasks) {
     if (!task.assignee) continue;

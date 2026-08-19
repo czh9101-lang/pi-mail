@@ -127,7 +127,7 @@ export let board = {
     // Progress-nudge: mail in-progress assignees who haven't posted progress
     // in a while. Disableable + tunable from the board config endpoint.
     nudgeEnabled: true,
-    nudgeIntervalMin: 30,
+    nudgeIntervalMin: 60,
     // Middle-manager: an ephemeral agent spawned on a schedule that reviews
     // the board for the favorited (managed) projects, unblocks stuck workers,
     // and shepherds finished tasks into Done/Archive. Disabled by default;

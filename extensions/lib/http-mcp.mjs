@@ -74,7 +74,7 @@ const inProcessBoardBackend = {
         apiTokenSet: !!board.config.apiToken,
         jiraEnabled: board.config.jiraEnabled !== false,
         nudgeEnabled: board.config.nudgeEnabled !== false,
-        nudgeIntervalMin: board.config.nudgeIntervalMin ?? 30,
+        nudgeIntervalMin: board.config.nudgeIntervalMin ?? 60,
         mmEnabled: board.config.mmEnabled === true,
         mmIntervalMin: board.config.mmIntervalMin ?? 30,
         mmModel: board.config.mmModel ?? "",

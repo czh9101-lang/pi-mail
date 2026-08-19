@@ -309,7 +309,7 @@ subtasks, column instructions, and actions (comment, add progress, move,
 assign, flag/clear, +subtask). It re-renders every 3 s poll, so it stays live.
 
 A **daemon nudge** mails in-progress assignees who haven't posted progress in
-a while (default 30 min; one reminder per gap). The operator can tune or
+a while (default 60 min; one reminder per gap). The operator can tune or
 disable it in Board → Settings (`nudgeEnabled`, `nudgeIntervalMin`).
 
 ## Middle manager
