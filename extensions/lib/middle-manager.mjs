@@ -287,7 +287,7 @@ function mmKickoff(favorites) {
     "   - Review: the work is done — review it (correctness, tests, scope). If clean, move to Done (board_move_task). If not clean, move back to In Progress with a board comment on what must change.",
     "   - Done: leave it on Done — only the human operator archives tasks.",
     "4. Only AFTER you have considered every task in every column: curate the managed-projects list with mail_set_project_favorite (add a project needing oversight, or unfavorite one fully done — be conservative).",
-    "5. Post a short board_comment on each task you touched explaining what you did, so the next agent/operator sees it.",
+    "5. Post a short board_comment ONLY on tasks you actually changed (moved, refined, reassigned, cleared a flag, etc.) explaining what you did, so the next agent/operator sees it. If nothing changed on a task, do NOT comment on it.",
     "",
     "## Before you finish",
     "Confirm you have made a decision for EVERY task in EVERY column (Refine, To Do, In Progress, Review, Done) for the managed projects. If you performed one action and were about to exit, STOP — go back and finish the rest of the board first.",

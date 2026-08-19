@@ -84,7 +84,9 @@ Only after you've made a decision for **every** task in **every** column do you:
 
 3. `mail_set_project_favorite` — add a project needing oversight, or unfavorite
    one fully done (be conservative).
-4. `board_comment_task` on each task you touched.
+4. `board_comment_task` only on tasks you actually changed (moved, refined,
+   reassigned, cleared a flag, etc.). If nothing changed on a task, do **not**
+   comment on it — a no-op comment is noise.
 
 ## Done
 
