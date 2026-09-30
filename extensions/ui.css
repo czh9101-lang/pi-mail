@@ -60,6 +60,14 @@
     display: flex;
     flex-direction: column;
   }
+  /* iOS auto-zoom fix — Safari zooms into any focused field whose font-size is
+     < 16px. On touch devices (and narrow/mobile viewports) force every
+     input/select/textarea to 16px so focusing never zooms. Desktop (fine
+     pointer, wide) keeps the compact per-widget sizes below. !important beats
+     the specific 12–14px rules for individual widgets. */
+  @media (pointer: coarse), (max-width: 640px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
   header {
     display: flex;
     align-items: center;

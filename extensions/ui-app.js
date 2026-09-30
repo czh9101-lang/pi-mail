@@ -569,3 +569,17 @@ window.addEventListener("resize", () => positionProjectsDropdown());
 window.addEventListener("scroll", () => positionProjectsDropdown(), true);
 
 pollTimer = setInterval(refresh, 3000);
+
+// ── Service worker (PWA offline shell + installability) ──────────────────────
+// Register /sw.js so the console can be installed and loads offline after the
+// first visit. Service workers require a secure context (https or localhost),
+// so registration is skipped on plain-http LAN access — the console still
+// works there, it just isn't installable/offline-capable.
+if ("serviceWorker" in navigator &&
+    (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname === "[::1]")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
+      /* offline installability unavailable — console works regardless */
+    });
+  });
+}

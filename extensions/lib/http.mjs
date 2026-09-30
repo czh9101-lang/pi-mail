@@ -70,6 +70,12 @@ const UI_ASSET_TYPES = {
   "/ui-logs.js": "text/javascript; charset=utf-8",
   "/ui-costs.js": "text/javascript; charset=utf-8",
   "/ui-app.js": "text/javascript; charset=utf-8",
+  "/manifest.webmanifest": "application/manifest+json; charset=utf-8",
+  "/sw.js": "text/javascript; charset=utf-8",
+  "/icon-192.png": "image/png",
+  "/icon-512.png": "image/png",
+  "/icon-maskable-192.png": "image/png",
+  "/icon-maskable-512.png": "image/png",
 };
 
 // ── Federation snapshot (for the UI) ──────────────────────────────────────────
@@ -148,16 +154,23 @@ export function createHttpServer({ uiHtmlPath, uiDir }) {
 
     // Split UI assets (css/js) served as separate files so ui.html stays
     // small. Re-read from disk on each request so edits take effect after a
-    // browser refresh with no daemon restart.
+    // browser refresh with no daemon restart. Text assets are read as UTF-8;
+    // binary assets (icons) are read as Buffers and given a Content-Length.
     if (req.method === "GET" && url.pathname in UI_ASSET_TYPES) {
+      const contentType = UI_ASSET_TYPES[url.pathname];
+      const isBinary = contentType.startsWith("image/");
       let body;
       try {
-        body = fs.readFileSync(path.join(uiDir, url.pathname.slice(1)), "utf8");
+        body = isBinary
+          ? fs.readFileSync(path.join(uiDir, url.pathname.slice(1)))
+          : fs.readFileSync(path.join(uiDir, url.pathname.slice(1)), "utf8");
       } catch (e) {
         json(res, 404, { error: "asset not found" });
         return;
       }
-      res.writeHead(200, { "Content-Type": UI_ASSET_TYPES[url.pathname] });
+      const headers = { "Content-Type": contentType };
+      if (Buffer.isBuffer(body)) headers["Content-Length"] = body.length;
+      res.writeHead(200, headers);
       res.end(body);
       return;
     }
